@@ -1,0 +1,3 @@
+enabled_provider: gemini
+commit_style: conventional
+language: english
