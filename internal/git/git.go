@@ -34,6 +34,17 @@ func Status() (string, error) {
 	return out.String(), nil
 }
 
+func StatusShort() (string, error) {
+	cmd := exec.Command("git", "status", "--short")
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	err := cmd.Run()
+	if err != nil {
+		return "", err
+	}
+	return out.String(), nil
+}
+
 func DiffStaged() (string, error) {
 	cmd := exec.Command("git", "diff", "--staged")
 	var out bytes.Buffer

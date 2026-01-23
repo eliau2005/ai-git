@@ -4,10 +4,22 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
+	"github.com/charmbracelet/bubbles/spinner"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/huh"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/user/ai-git/internal/config"
 	"github.com/user/ai-git/internal/git"
 	"github.com/user/ai-git/internal/provider"
+)
+
+// Global Styles
+var (
+	styleTitle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#7D56F4")).BorderStyle(lipgloss.RoundedBorder()).Padding(0, 1)
+	styleSuccess = lipgloss.NewStyle().Foreground(lipgloss.Color("#43BF6D"))
+	styleError   = lipgloss.NewStyle().Foreground(lipgloss.Color("#FF5F87"))
 )
 
 func main() {
@@ -64,7 +76,7 @@ func printUsage() {
 func handleStatus() {
 	out, err := git.Status()
 	if err != nil {
-		fmt.Printf("Error: %v\n", err)
+		fmt.Println(styleError.Render(fmt.Sprintf("Error: %v", err)))
 		return
 	}
 	fmt.Print(out)
@@ -77,74 +89,151 @@ func handleAdd() {
 	}
 	err := git.Add(os.Args[2])
 	if err != nil {
-		fmt.Printf("Error: %v\n", err)
+		fmt.Println(styleError.Render(fmt.Sprintf("Error: %v", err)))
 		return
 	}
-	fmt.Println("Added", os.Args[2])
+	fmt.Println(styleSuccess.Render(fmt.Sprintf("Added %s", os.Args[2])))
 }
 
-func handleCommit() {
-	// 1. Check Status and Auto-Stage Logic
-	fmt.Println("--- Git Status ---")
-	statusOut, err := git.Status()
-	if err != nil {
-		fmt.Printf("Error: %v\n", err)
-		return
-	}
-	fmt.Print(statusOut)
-	fmt.Println("------------------")
+// --- Spinner Model for AI Generation ---
 
+type spinnerModel struct {
+	spinner   spinner.Model
+	diff      string
+	provider  provider.Provider
+	msgResult string
+	err       error
+	done      bool
+}
+
+func initialSpinnerModel(p provider.Provider, diff string) spinnerModel {
+	s := spinner.New()
+	s.Spinner = spinner.Dot
+	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
+	return spinnerModel{spinner: s, diff: diff, provider: p}
+}
+
+func (m spinnerModel) Init() tea.Cmd {
+	return tea.Batch(m.spinner.Tick, generateMsgCmd(m.provider, m.diff))
+}
+
+type msgGeneratedMsg struct {
+	msg string
+	err error
+}
+
+func generateMsgCmd(p provider.Provider, diff string) tea.Cmd {
+	return func() tea.Msg {
+		msg, err := p.GenerateCommitMessage(diff, "")
+		return msgGeneratedMsg{msg: msg, err: err}
+	}
+}
+
+func (m spinnerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		if msg.Type == tea.KeyCtrlC {
+			return m, tea.Quit
+		}
+	case spinner.TickMsg:
+		var cmd tea.Cmd
+		m.spinner, cmd = m.spinner.Update(msg)
+		return m, cmd
+	case msgGeneratedMsg:
+		m.msgResult = msg.msg
+		m.err = msg.err
+		m.done = true
+		return m, tea.Quit
+	}
+	return m, nil
+}
+
+func (m spinnerModel) View() string {
+	if m.done {
+		return ""
+	}
+	return fmt.Sprintf("\n %s AI is thinking...\n\n", m.spinner.View())
+}
+
+// --- End Spinner Model ---
+
+func handleCommit() {
+	fmt.Println(styleTitle.Render("AI Commit"))
+
+	// Step A: Smart Staging
 	diff, err := git.DiffStaged()
 	if err != nil {
-		fmt.Printf("Error checking staged changes: %v\n", err)
+		fmt.Println(styleError.Render(fmt.Sprintf("Error checking staged changes: %v", err)))
 		return
 	}
 
 	if diff == "" {
-		fmt.Println("No staged changes detected.")
-		fmt.Print("Stage all changes? (y/n): ")
-		var confirmAdd string
-		fmt.Scanln(&confirmAdd)
-		if confirmAdd == "y" || confirmAdd == "Y" {
-			err := git.Add(".")
-			if err != nil {
-				fmt.Printf("Error adding files: %v\n", err)
-				return
-			}
-			// Re-check diff after adding
-			diff, err = git.DiffStaged()
-			if err != nil {
-				fmt.Printf("Error checking staged changes: %v\n", err)
-				return
-			}
-			if diff == "" {
-				fmt.Println("Still no staged changes. Aborting.")
-				return
-			}
-			// Show updated status
-			fmt.Println("--- Updated Status ---")
-			statusOut, _ = git.Status()
-			fmt.Print(statusOut)
-			fmt.Println("----------------------")
-		} else {
-			fmt.Println("Aborting commit.")
+		statusShort, err := git.StatusShort()
+		if err != nil {
+			fmt.Println(styleError.Render(fmt.Sprintf("Error getting status: %v", err)))
 			return
 		}
-	} else {
-		// Changes are already staged, proceed directly
-		fmt.Println("Staged changes detected. Proceeding...")
+
+		files := parseGitStatusFiles(statusShort)
+		if len(files) == 0 {
+			fmt.Println(styleError.Render("No changes to commit."))
+			return
+		}
+
+		var selectedFiles []string
+		
+		// Map strings to huh.Options
+		var options []huh.Option[string]
+		for _, f := range files {
+			options = append(options, huh.NewOption(f, f))
+		}
+
+		form := huh.NewForm(
+			huh.NewGroup(
+				huh.NewMultiSelect[string]().
+					Title("No staged changes detected. Select files to stage:").
+					Options(options...).
+					Value(&selectedFiles),
+			),
+		)
+
+		err = form.Run()
+		if err != nil {
+			fmt.Println(styleError.Render("Selection cancelled."))
+			return
+		}
+
+		if len(selectedFiles) == 0 {
+			fmt.Println(styleError.Render("No files selected. Aborting."))
+			return
+		}
+
+		for _, f := range selectedFiles {
+			err := git.Add(f)
+			if err != nil {
+				fmt.Println(styleError.Render(fmt.Sprintf("Error adding %s: %v", f, err)))
+				return
+			}
+		}
+
+		// Re-check diff
+		diff, err = git.DiffStaged()
+		if err != nil {
+			fmt.Println(styleError.Render(fmt.Sprintf("Error checking staged changes: %v", err)))
+			return
+		}
 	}
 
-	// 2. Load Config and Provider
+	// Step B: AI Generation with Feedback
 	cfg, err := config.LoadConfig()
 	if err != nil {
-		fmt.Printf("Error loading config: %v\n", err)
+		fmt.Println(styleError.Render(fmt.Sprintf("Error loading config: %v", err)))
 		return
 	}
 
 	root, err := git.GetRepoRoot()
 	if err != nil {
-		fmt.Printf("Error: %v\n", err)
+		fmt.Println(styleError.Render(fmt.Sprintf("Error: %v", err)))
 		return
 	}
 
@@ -156,13 +245,13 @@ func handleCommit() {
 	}
 
 	if selectedProvider == "" {
-		fmt.Println("Error: No AI provider configured. Use 'ai-git config' to set one.")
+		fmt.Println(styleError.Render("Error: No AI provider configured. Use 'ai-git config' to set one."))
 		return
 	}
 
 	pCfg, ok := cfg.Providers[selectedProvider]
 	if !ok {
-		fmt.Printf("Error: Provider '%s' not configured.\n", selectedProvider)
+		fmt.Println(styleError.Render(fmt.Sprintf("Error: Provider '%s' not configured.", selectedProvider)))
 		return
 	}
 
@@ -172,63 +261,102 @@ func handleCommit() {
 	}
 
 	factory := &provider.ProviderFactory{}
-	// Pass configured prompts to the provider factory
 	p := factory.GetProvider(selectedProvider, pCfg, model, cfg.SystemPrompt, cfg.CommitPromptTemplate)
 	if p == nil {
-		fmt.Printf("Error: Could not initialize provider '%s'.\n", selectedProvider)
+		fmt.Println(styleError.Render(fmt.Sprintf("Error: Could not initialize provider '%s'.", selectedProvider)))
 		return
 	}
 
-	fmt.Println("Generating commit message...")
-	msg, err := p.GenerateCommitMessage(diff, "")
+	m := initialSpinnerModel(p, diff)
+	pProgram := tea.NewProgram(m)
+	finalModel, err := pProgram.Run()
 	if err != nil {
-		fmt.Printf("Error: %v\n", err)
+		fmt.Println(styleError.Render(fmt.Sprintf("Error running spinner: %v", err)))
 		return
 	}
 
-	fmt.Printf("Proposed commit message:\n---\n%s\n---\n", msg)
-	fmt.Print("Confirm commit? (y/n): ")
-	var confirm string
-	fmt.Scanln(&confirm)
-
-	if confirm == "y" || confirm == "Y" {
-		err := git.Commit(msg)
-		if err != nil {
-			fmt.Printf("Error: %v\n", err)
-			return
-		}
-		fmt.Println("Committed successfully.")
-	} else {
-		fmt.Println("Commit cancelled.")
+	finalSpinnerModel := finalModel.(spinnerModel)
+	if finalSpinnerModel.err != nil {
+		fmt.Println(styleError.Render(fmt.Sprintf("AI Generation Error: %v", finalSpinnerModel.err)))
+		return
 	}
+
+	generatedMsg := finalSpinnerModel.msgResult
+
+	// Step C: Review & Edit
+	var finalMsg string
+	var confirm bool
+
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewInput().
+				Title("Review Commit Message").
+				Value(&generatedMsg),
+			huh.NewConfirm().
+				Title("Commit with this message?").
+				Value(&confirm),
+		),
+	)
+
+	err = form.Run()
+	if err != nil {
+		fmt.Println(styleError.Render("Aborted."))
+		return
+	}
+
+	if !confirm {
+		fmt.Println(styleError.Render("Commit cancelled."))
+		return
+	}
+
+	finalMsg = generatedMsg
+
+	// Step D: Execution
+	err = git.Commit(finalMsg)
+	if err != nil {
+		fmt.Println(styleError.Render(fmt.Sprintf("Commit failed: %v", err)))
+		return
+	}
+
+	fmt.Println(styleSuccess.Render("Committed successfully."))
 }
 
 func handlePush() {
 	err := git.Push()
 	if err != nil {
-		fmt.Printf("Error: %v\n", err)
+		fmt.Println(styleError.Render(fmt.Sprintf("Error: %v", err)))
 		return
 	}
-	fmt.Println("Pushed successfully.")
+	fmt.Println(styleSuccess.Render("Pushed successfully."))
 }
 
 func handlePull() {
 	err := git.Pull()
 	if err != nil {
-		fmt.Printf("Error: %v\n", err)
+		fmt.Println(styleError.Render(fmt.Sprintf("Error: %v", err)))
 		return
 	}
-	fmt.Println("Pulled successfully.")
+	fmt.Println(styleSuccess.Render("Pulled successfully."))
 }
 
 func handleSync() {
-	// handleCommit now handles status and adding
 	handleCommit()
 
-	fmt.Print("Push changes? (y/n): ")
-	var confirmPush string
-	fmt.Scanln(&confirmPush)
-	if confirmPush == "y" || confirmPush == "Y" {
+	var confirmPush bool
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewConfirm().
+				Title("Push changes to remote?").
+				Value(&confirmPush),
+		),
+	)
+
+	err := form.Run()
+	if err != nil {
+		return
+	}
+
+	if confirmPush {
 		handlePush()
 	}
 }
@@ -236,13 +364,13 @@ func handleSync() {
 func handleInit() {
 	root, err := git.GetRepoRoot()
 	if err != nil {
-		fmt.Println("Not a git repository.")
+		fmt.Println(styleError.Render("Not a git repository."))
 		return
 	}
 
 	repoConfigPath := filepath.Join(root, ".ai-git.yaml")
 	if _, err := os.Stat(repoConfigPath); err == nil {
-		fmt.Println("Repository already initialized with AI-Git.")
+		fmt.Println(styleSuccess.Render("Repository already initialized with AI-Git."))
 		return
 	}
 
@@ -255,40 +383,40 @@ func handleInit() {
 	content := fmt.Sprintf("enabled_provider: %s\ncommit_style: conventional\nlanguage: english\n", defaultProvider)
 	err = os.WriteFile(repoConfigPath, []byte(content), 0644)
 	if err != nil {
-		fmt.Printf("Error: %v\n", err)
+		fmt.Println(styleError.Render(fmt.Sprintf("Error: %v", err)))
 		return
 	}
-	fmt.Println("Initialized .ai-git.yaml")
+	fmt.Println(styleSuccess.Render("Initialized .ai-git.yaml"))
 }
 
 func handleDoctor() {
-	fmt.Println("Checking AI-Git setup...")
+	fmt.Println(styleTitle.Render("AI-Git Doctor"))
 
 	// Git
 	if git.IsRepo() {
-		fmt.Println("[OK] Git repository detected")
+		fmt.Println(styleSuccess.Render("[OK] Git repository detected"))
 	} else {
-		fmt.Println("[FAIL] Not a git repository")
+		fmt.Println(styleError.Render("[FAIL] Not a git repository"))
 	}
 
 	// Config
 	cfg, err := config.LoadConfig()
 	if err != nil {
-		fmt.Printf("[FAIL] Could not load config: %v\n", err)
+		fmt.Println(styleError.Render(fmt.Sprintf("[FAIL] Could not load config: %v", err)))
 	} else {
-		fmt.Println("[OK] Configuration loaded")
+		fmt.Println(styleSuccess.Render("[OK] Configuration loaded"))
 		if cfg.DefaultProvider == "" {
-			fmt.Println("[WARN] No default provider set")
+			fmt.Println(styleError.Render("[WARN] No default provider set"))
 		} else {
 			fmt.Printf("[OK] Default provider: %s\n", cfg.DefaultProvider)
 			pCfg, ok := cfg.Providers[cfg.DefaultProvider]
 			if !ok {
-				fmt.Printf("[FAIL] Provider '%s' configuration missing\n", cfg.DefaultProvider)
+				fmt.Println(styleError.Render(fmt.Sprintf("[FAIL] Provider '%s' configuration missing", cfg.DefaultProvider)))
 			} else {
 				if pCfg.APIKey == "" && cfg.DefaultProvider != "ollama" {
-					fmt.Printf("[FAIL] API key for '%s' is missing\n", cfg.DefaultProvider)
+					fmt.Println(styleError.Render(fmt.Sprintf("[FAIL] API key for '%s' is missing", cfg.DefaultProvider)))
 				} else {
-					fmt.Printf("[OK] API key configured for '%s'\n", cfg.DefaultProvider)
+					fmt.Println(styleSuccess.Render(fmt.Sprintf("[OK] API key configured for '%s'", cfg.DefaultProvider)))
 				}
 			}
 		}
@@ -306,7 +434,7 @@ func handleConfig() {
 
 	cfg, err := config.LoadConfig()
 	if err != nil {
-		fmt.Printf("Error: %v\n", err)
+		fmt.Println(styleError.Render(fmt.Sprintf("Error: %v", err)))
 		return
 	}
 
@@ -314,13 +442,13 @@ func handleConfig() {
 	switch subCommand {
 	case "set-provider":
 		if len(os.Args) < 4 {
-			fmt.Println("Missing provider name")
+			fmt.Println(styleError.Render("Missing provider name"))
 			return
 		}
 		cfg.DefaultProvider = os.Args[3]
 	case "set-key":
 		if len(os.Args) < 5 {
-			fmt.Println("Missing provider name and/or API key")
+			fmt.Println(styleError.Render("Missing provider name and/or API key"))
 			return
 		}
 		pName := os.Args[3]
@@ -330,7 +458,7 @@ func handleConfig() {
 		cfg.Providers[pName] = pCfg
 	case "set-model":
 		if len(os.Args) < 5 {
-			fmt.Println("Missing provider name and/or model name")
+			fmt.Println(styleError.Render("Missing provider name and/or model name"))
 			return
 		}
 		pName := os.Args[3]
@@ -339,14 +467,34 @@ func handleConfig() {
 		pCfg.DefaultModel = model
 		cfg.Providers[pName] = pCfg
 	default:
-		fmt.Printf("Unknown config subcommand: %s\n", subCommand)
+		fmt.Println(styleError.Render(fmt.Sprintf("Unknown config subcommand: %s", subCommand)))
 		return
 	}
 
 	err = cfg.Save()
 	if err != nil {
-		fmt.Printf("Error saving config: %v\n", err)
+		fmt.Println(styleError.Render(fmt.Sprintf("Error saving config: %v", err)))
 		return
 	}
-	fmt.Println("Configuration updated.")
+	fmt.Println(styleSuccess.Render("Configuration updated."))
+}
+
+func parseGitStatusFiles(status string) []string {
+	var files []string
+	lines := strings.Split(status, "\n")
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		// Short status format is "XY filename" e.g. "M  file.go" or "?? file.go"
+		// XY are the first two chars.
+		if len(trimmed) > 3 {
+			// Extract filename, handling potential quotes if git does that, though --short usually just lists names.
+			// The file name starts after the first 3 characters (status flags + space).
+			filePart := strings.TrimSpace(line[2:])
+			files = append(files, filePart)
+		}
+	}
+	return files
 }
