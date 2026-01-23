@@ -284,14 +284,24 @@ func handleCommit() {
 	generatedMsg := finalSpinnerModel.msgResult
 
 	// Step C: Review & Edit
+	parts := strings.SplitN(generatedMsg, "\n", 2)
+	title := strings.TrimSpace(parts[0])
+	description := ""
+	if len(parts) > 1 {
+		description = strings.TrimSpace(parts[1])
+	}
+
 	var finalMsg string
 	var confirm bool
 
 	form := huh.NewForm(
 		huh.NewGroup(
 			huh.NewInput().
-				Title("Review Commit Message").
-				Value(&generatedMsg),
+				Title("Commit Title").
+				Value(&title),
+			huh.NewInput().
+				Title("Commit Description").
+				Value(&description),
 			huh.NewConfirm().
 				Title("Commit with this message?").
 				Value(&confirm),
@@ -309,7 +319,7 @@ func handleCommit() {
 		return
 	}
 
-	finalMsg = generatedMsg
+	finalMsg = fmt.Sprintf("%s\n\n%s", title, description)
 
 	// Step D: Execution
 	err = git.Commit(finalMsg)
