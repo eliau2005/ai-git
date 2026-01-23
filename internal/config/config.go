@@ -8,9 +8,11 @@ import (
 )
 
 type Config struct {
-	DefaultProvider string            `yaml:"default_provider"`
-	Providers       map[string]ProviderConfig `yaml:"providers"`
-	Output          OutputConfig      `yaml:"output"`
+	DefaultProvider      string                    `yaml:"default_provider"`
+	Providers            map[string]ProviderConfig `yaml:"providers"`
+	Output               OutputConfig              `yaml:"output"`
+	SystemPrompt         string                    `yaml:"system_prompt,omitempty"`
+	CommitPromptTemplate string                    `yaml:"commit_prompt_template,omitempty"`
 }
 
 type ProviderConfig struct {
@@ -38,12 +40,17 @@ func LoadConfig() (*Config, error) {
 		return nil, err
 	}
 	configPath := filepath.Join(home, ".config", "ai-git", "config.yaml")
-	
+
+	defaultSystemPrompt := "You are an expert developer. Generate a raw git commit message. Output ONLY the message. Structure: a short title, then a blank line, then a description. No conversational filler, no quotes, no backticks."
+	defaultCommitPrompt := "Generate a raw git commit message for the changes below. Output ONLY the message. Structure: a short title, then a blank line, then a description. No conversational filler, no quotes, no backticks.\n\nChanges:\n%s\n\n%s"
+
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return &Config{
-				Providers: make(map[string]ProviderConfig),
+				Providers:            make(map[string]ProviderConfig),
+				SystemPrompt:         defaultSystemPrompt,
+				CommitPromptTemplate: defaultCommitPrompt,
 			}, nil
 		}
 		return nil, err
@@ -53,6 +60,14 @@ func LoadConfig() (*Config, error) {
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, err
 	}
+
+	if cfg.SystemPrompt == "" {
+		cfg.SystemPrompt = defaultSystemPrompt
+	}
+	if cfg.CommitPromptTemplate == "" {
+		cfg.CommitPromptTemplate = defaultCommitPrompt
+	}
+
 	return &cfg, nil
 }
 

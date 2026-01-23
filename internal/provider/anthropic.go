@@ -9,8 +9,10 @@ import (
 )
 
 type AnthropicProvider struct {
-	APIKey string
-	Model  string
+	APIKey       string
+	Model        string
+	SystemPrompt string
+	CommitPrompt string
 }
 
 func (p *AnthropicProvider) GetName() string {
@@ -31,13 +33,31 @@ type anthropicMessagesResponse struct {
 	Content []struct {
 		Text string `json:"text"`
 	} `json:"content"`
+	Error struct {
+		Type    string `json:"type"`
+		Message string `json:"message"`
+	} `json:"error,omitempty"`
 }
 
 func (p *AnthropicProvider) GenerateCommitMessage(diff string, context string) (string, error) {
+	// Truncate
+	if len(diff) > 15000 {
+		diff = diff[:15000] + "\n... [Diff truncated] ..."
+	}
+
 	url := "https://api.anthropic.com/v1/messages"
 
-	systemPrompt := "You are an expert developer. Generate a raw git commit message. Output ONLY the message. Structure: a short title, then a blank line, then a description. No conversational filler, no quotes, no backticks."
-	userPrompt := fmt.Sprintf("Generate a git commit message for these changes:\n\n%s\n\n%s", diff, context)
+	systemPrompt := p.SystemPrompt
+	if systemPrompt == "" {
+		systemPrompt = "You are an expert developer. Generate a raw git commit message. Output ONLY the message. Structure: a short title, then a blank line, then a description. No conversational filler, no quotes, no backticks."
+	}
+
+	commitPromptTemplate := p.CommitPrompt
+	if commitPromptTemplate == "" {
+		commitPromptTemplate = "Generate a git commit message for these changes:\n\n%s\n\n%s"
+	}
+
+	userPrompt := fmt.Sprintf(commitPromptTemplate, diff, context)
 
 	reqBody := anthropicMessagesRequest{
 		Model:     p.Model,
@@ -73,7 +93,11 @@ func (p *AnthropicProvider) GenerateCommitMessage(diff string, context string) (
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
+		var errResp anthropicMessagesResponse
 		body, _ := io.ReadAll(resp.Body)
+		if json.Unmarshal(body, &errResp) == nil && errResp.Error.Message != "" {
+			return "", fmt.Errorf("Anthropic API error: %s (Type: %s)", errResp.Error.Message, errResp.Error.Type)
+		}
 		return "", fmt.Errorf("Anthropic API error: %s", string(body))
 	}
 

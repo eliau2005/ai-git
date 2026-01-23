@@ -12,27 +12,35 @@ type Provider interface {
 type ProviderFactory struct {
 }
 
-func (f *ProviderFactory) GetProvider(name string, pCfg config.ProviderConfig, model string) Provider {
+func (f *ProviderFactory) GetProvider(name string, pCfg config.ProviderConfig, model string, systemPrompt string, commitPromptTemplate string) Provider {
 	switch name {
 	case "openai":
 		return &OpenAIProvider{
-			APIKey: pCfg.APIKey,
-			Model:  model,
+			APIKey:       pCfg.APIKey,
+			Model:        model,
+			SystemPrompt: systemPrompt,
+			CommitPrompt: commitPromptTemplate,
 		}
 	case "gemini":
 		return &GeminiProvider{
-			APIKey: pCfg.APIKey,
-			Model:  model,
+			APIKey:       pCfg.APIKey,
+			Model:        model,
+			SystemPrompt: systemPrompt,
+			CommitPrompt: commitPromptTemplate,
 		}
 	case "ollama":
 		return &OllamaProvider{
-			BaseURL: pCfg.BaseURL,
-			Model:   model,
+			BaseURL:      pCfg.BaseURL,
+			Model:        model,
+			SystemPrompt: systemPrompt,
+			CommitPrompt: commitPromptTemplate,
 		}
 	case "anthropic":
 		return &AnthropicProvider{
-			APIKey: pCfg.APIKey,
-			Model:  model,
+			APIKey:       pCfg.APIKey,
+			Model:        model,
+			SystemPrompt: systemPrompt,
+			CommitPrompt: commitPromptTemplate,
 		}
 	default:
 		return nil

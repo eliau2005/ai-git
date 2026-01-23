@@ -84,42 +84,58 @@ func handleAdd() {
 }
 
 func handleCommit() {
-	// 1. Show Status
+	// 1. Check Status and Auto-Stage Logic
 	fmt.Println("--- Git Status ---")
-	out, err := git.Status()
+	statusOut, err := git.Status()
 	if err != nil {
 		fmt.Printf("Error: %v\n", err)
 		return
 	}
-	fmt.Print(out)
+	fmt.Print(statusOut)
 	fmt.Println("------------------")
 
-	// 2. Stage Changes (Interactive-ish)
-	// For "smart" behavior, we'll try to add everything if nothing is staged,
-	// but let's just follow the user's "status, add" flow request.
-	// We will ask to stage all changes.
-	fmt.Print("Stage all changes? (y/n): ")
-	var confirmAdd string
-	fmt.Scanln(&confirmAdd)
-	if confirmAdd == "y" || confirmAdd == "Y" {
-		err := git.Add(".")
-		if err != nil {
-			fmt.Printf("Error adding files: %v\n", err)
-			return
-		}
-	}
-
-	// 3. Show Status Again
-	fmt.Println("--- Updated Status ---")
-	out, err = git.Status()
+	diff, err := git.DiffStaged()
 	if err != nil {
-		fmt.Printf("Error: %v\n", err)
+		fmt.Printf("Error checking staged changes: %v\n", err)
 		return
 	}
-	fmt.Print(out)
-	fmt.Println("----------------------")
 
-	// 4. Proceed with Generation
+	if diff == "" {
+		fmt.Println("No staged changes detected.")
+		fmt.Print("Stage all changes? (y/n): ")
+		var confirmAdd string
+		fmt.Scanln(&confirmAdd)
+		if confirmAdd == "y" || confirmAdd == "Y" {
+			err := git.Add(".")
+			if err != nil {
+				fmt.Printf("Error adding files: %v\n", err)
+				return
+			}
+			// Re-check diff after adding
+			diff, err = git.DiffStaged()
+			if err != nil {
+				fmt.Printf("Error checking staged changes: %v\n", err)
+				return
+			}
+			if diff == "" {
+				fmt.Println("Still no staged changes. Aborting.")
+				return
+			}
+			// Show updated status
+			fmt.Println("--- Updated Status ---")
+			statusOut, _ = git.Status()
+			fmt.Print(statusOut)
+			fmt.Println("----------------------")
+		} else {
+			fmt.Println("Aborting commit.")
+			return
+		}
+	} else {
+		// Changes are already staged, proceed directly
+		fmt.Println("Staged changes detected. Proceeding...")
+	}
+
+	// 2. Load Config and Provider
 	cfg, err := config.LoadConfig()
 	if err != nil {
 		fmt.Printf("Error loading config: %v\n", err)
@@ -155,19 +171,9 @@ func handleCommit() {
 		model = repoCfg.ModelOverride
 	}
 
-	diff, err := git.DiffStaged()
-	if err != nil {
-		fmt.Printf("Error: %v\n", err)
-		return
-	}
-
-	if diff == "" {
-		fmt.Println("No staged changes to commit.")
-		return
-	}
-
 	factory := &provider.ProviderFactory{}
-	p := factory.GetProvider(selectedProvider, pCfg, model)
+	// Pass configured prompts to the provider factory
+	p := factory.GetProvider(selectedProvider, pCfg, model, cfg.SystemPrompt, cfg.CommitPromptTemplate)
 	if p == nil {
 		fmt.Printf("Error: Could not initialize provider '%s'.\n", selectedProvider)
 		return
