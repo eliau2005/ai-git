@@ -291,35 +291,67 @@ func handleCommit() {
 		description = strings.TrimSpace(parts[1])
 	}
 
-	var finalMsg string
-	var confirm bool
+	for {
+		// Summary View
+		fmt.Println(lipgloss.NewStyle().MarginTop(1).Render(
+			lipgloss.JoinVertical(lipgloss.Left,
+				lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("212")).Render("Title:"),
+				lipgloss.NewStyle().PaddingLeft(2).Render(title),
+				"",
+				lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("212")).Render("Description:"),
+				lipgloss.NewStyle().PaddingLeft(2).Render(description),
+			),
+		))
 
-	form := huh.NewForm(
-		huh.NewGroup(
-			huh.NewInput().
-				Title("Commit Title").
-				Value(&title),
-			huh.NewInput().
-				Title("Commit Description").
-				Value(&description),
-			huh.NewConfirm().
-				Title("Commit with this message?").
-				Value(&confirm),
-		),
-	)
+		var action string
+		form := huh.NewForm(
+			huh.NewGroup(
+				huh.NewSelect[string]().
+					Title("Choose an action:").
+					Options(
+						huh.NewOption("Commit Changes", "commit").Selected(true),
+						huh.NewOption("Edit Message", "edit"),
+						huh.NewOption("Cancel", "cancel"),
+					).
+					Value(&action),
+			),
+		)
 
-	err = form.Run()
-	if err != nil {
-		fmt.Println(styleError.Render("Aborted."))
-		return
+		err = form.Run()
+		if err != nil {
+			fmt.Println(styleError.Render("Aborted."))
+			return
+		}
+
+		if action == "cancel" {
+			fmt.Println(styleError.Render("Commit cancelled."))
+			return
+		}
+
+		if action == "commit" {
+			break
+		}
+
+		if action == "edit" {
+			editForm := huh.NewForm(
+				huh.NewGroup(
+					huh.NewInput().
+						Title("Commit Title").
+						Value(&title),
+					huh.NewInput(). // Using Input as fallback for multi-line editing
+						Title("Commit Description").
+						Value(&description),
+				),
+			)
+			err = editForm.Run()
+			if err != nil {
+				fmt.Println(styleError.Render("Editing cancelled."))
+				return
+			}
+		}
 	}
 
-	if !confirm {
-		fmt.Println(styleError.Render("Commit cancelled."))
-		return
-	}
-
-	finalMsg = fmt.Sprintf("%s\n\n%s", title, description)
+	finalMsg := fmt.Sprintf("%s\n\n%s", title, description)
 
 	// Step D: Execution
 	err = git.Commit(finalMsg)
