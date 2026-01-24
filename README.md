@@ -20,9 +20,14 @@ It automatically writes smart, organized, and conventional commit messages by an
 - Go (version 1.21 or higher).
 
 ### 🌟 Option 1: Quick Install (Recommended)
-If you have Go configured on your machine, this is the fastest method (Works on Windows & Linux):
+If you have Go configured on your machine, this is the fastest method (Works on Windows & Linux). 
+Run this command to bypass the cache and get the latest version:
 ```bash
-go install github.com/eliau2005/ai-git/cmd/ai-git@latest
+# Linux/macOS
+GOPROXY=direct go install github.com/eliau2005/ai-git/cmd/ai-git@latest
+
+# Windows (PowerShell)
+$env:GOPROXY="direct"; go install github.com/eliau2005/ai-git/cmd/ai-git@latest
 ```
 *Note: Ensure your Go Bin directory is in your PATH.*
 
@@ -64,12 +69,16 @@ Use this method if you cloned the repository (`git clone`).
    *Now close your terminal and reopen it.*
 
 ## 🔄 How to Update?
-New version released? Here is how to update in seconds:
+New version released? Here is how to update in seconds (recommeneded):
 
-- **If installed via `go install`:**
-  Simply run the command again:
+- **If installed via `go install` (Works on Windows & Linux):**
+  Run this command to bypass the cache and get the latest version immediately:
   ```bash
-  go install github.com/eliau2005/ai-git/cmd/ai-git@latest
+  # Linux/macOS
+  GOPROXY=direct go install github.com/eliau2005/ai-git/cmd/ai-git@latest
+
+  # Windows (PowerShell)
+  $env:GOPROXY="direct"; go install github.com/eliau2005/ai-git/cmd/ai-git@latest
   ```
 
 - **If installed manually:**
