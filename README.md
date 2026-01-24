@@ -57,33 +57,43 @@ Ensure you have the following installed on your system:
 ### Windows
 
 1.  **Clone the Repository**
-    Open PowerShell or Command Prompt:
+    Open PowerShell (Run as Administrator for path setup):
     ```powershell
-git clone https://github.com/eliau2005/ai-git.git
-cd ai-git
+    git clone https://github.com/eliau2005/ai-git.git
+    cd ai-git
     ```
 
 2.  **Download Dependencies**
     ```powershell
-go mod tidy
+    go mod tidy
     ```
 
 3.  **Build the Binary**
     ```powershell
-go build -o ai-git.exe cmd/ai-git/main.go
+    go build -o ai-git.exe cmd/ai-git/main.go
     ```
 
 4.  **Install Globally**
-    Create a folder for your custom tools (e.g., `C:\Tools`) and add it to your System PATH environment variable. Then move the executable there:
+    Create a folder for your tools and add it to your User PATH:
     ```powershell
-mkdir C:\Tools
-move ai-git.exe C:\Tools\
+    # Create the folder
+    New-Item -ItemType Directory -Force -Path "C:\Tools"
+    
+    # Move the binary
+    Move-Item -Path .\ai-git.exe -Destination "C:\Tools\ai-git.exe" -Force
+
+    # Add to PATH (Permanent for current user)
+    $OldPath = [Environment]::GetEnvironmentVariable("PATH", "User")
+    if ($OldPath -notlike "*C:\Tools*") {
+        [Environment]::SetEnvironmentVariable("PATH", "$OldPath;C:\Tools", "User")
+        Write-Host "PATH updated. Please restart your terminal." -ForegroundColor Green
+    }
     ```
-    *Note: You may need to restart your terminal for the PATH change to take effect.*
 
 5.  **Verify Installation**
+    Restart PowerShell and run:
     ```powershell
-ai-git version
+    ai-git version
     ```
 
 ## 🔄 Updating to a Newer Version
@@ -110,8 +120,8 @@ To update AI-Git to the latest version, follow these steps:
 
     **Windows:**
     ```powershell
-go build -o ai-git.exe cmd/ai-git/main.go
-move /Y ai-git.exe C:\Tools\
+    go build -o ai-git.exe cmd/ai-git/main.go
+    Move-Item -Path .\ai-git.exe -Destination "C:\Tools\ai-git.exe" -Force
     ```
 
 ## 🛠️ Usage
@@ -138,22 +148,22 @@ The typical workflow replaces standard git commands with their AI-powered counte
 
 *   **Stage Files:**
     ```bash
-ai-git add
-# Opens an interactive checklist to select files
+    ai-git add
+    # Opens an interactive checklist to select files
     ```
 
 *   **Generate Commit:**
     ```bash
-ai-git commit
-```
+    ai-git commit
+    ```
     *   Scans staged changes (or asks to stage if empty).
     *   Generates a commit message using AI.
     *   Presents a review screen to Edit (Title/Description), Commit, or Cancel.
 
 *   **Sync (Commit & Push):**
     ```bash
-ai-git sync
-# Performs Add -> Commit -> Push in one flow
+    ai-git sync
+    # Performs Add -> Commit -> Push in one flow
     ```
 
 ### 4. Diagnostics
