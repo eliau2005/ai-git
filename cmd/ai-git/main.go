@@ -11,9 +11,9 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/user/ai-git/internal/config"
-	"github.com/user/ai-git/internal/git"
-	"github.com/user/ai-git/internal/provider"
+	"github.com/eliau2005/ai-git/internal/config"
+	"github.com/eliau2005/ai-git/internal/git"
+	"github.com/eliau2005/ai-git/internal/provider"
 )
 
 // Global Styles

@@ -1,7 +1,7 @@
 package provider
 
 import (
-	"github.com/user/ai-git/internal/config"
+	"github.com/eliau2005/ai-git/internal/config"
 )
 
 type Provider interface {

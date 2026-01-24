@@ -1,4 +1,4 @@
-module github.com/user/ai-git
+module github.com/eliau2005/ai-git
 
 go 1.25.6
 
