@@ -21,6 +21,7 @@ The tool runs in the current working directory and operates entirely through ter
 ## 3. Supported Platforms
 
 * Linux (x64)
+* windows (10/11)
 
 ---
 
