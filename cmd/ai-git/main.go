@@ -52,7 +52,7 @@ func main() {
 	case "doctor":
 		handleDoctor()
 	case "version":
-		fmt.Println("ai-git version 0.2.0")
+		fmt.Println("ai-git version 1.0.2")
 	default:
 		fmt.Printf("Unknown command: %s\n", command)
 		printUsage()
