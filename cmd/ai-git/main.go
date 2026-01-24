@@ -386,13 +386,25 @@ func handleCommit() {
 	}
 
 	for {
-		fmt.Println(lipgloss.NewStyle().MarginTop(1).Border(lipgloss.RoundedBorder()).Padding(0, 1).Render(
+		// Summary View
+		// Create styles for content with wrapping
+		width := 70
+		labelStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("212")).MarginBottom(0)
+		contentStyle := lipgloss.NewStyle().PaddingLeft(2).Width(width).MaxWidth(width)
+		
+		boxStyle := lipgloss.NewStyle().
+			MarginTop(1).
+			Border(lipgloss.RoundedBorder()).
+			Padding(0, 1).
+			Width(width + 4) // content + padding + border
+
+		fmt.Println(boxStyle.Render(
 			lipgloss.JoinVertical(lipgloss.Left,
-				lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("212")).Render("Title:"),
-				title,
-				"",
-				lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("212")).Render("Description:"),
-				description,
+				labelStyle.Render("Title:"),
+				contentStyle.Render(title),
+				"", // Spacer
+				labelStyle.Render("Description:"),
+				contentStyle.Render(description),
 			),
 		))
 
