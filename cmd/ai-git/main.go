@@ -52,7 +52,7 @@ func main() {
 	case "doctor":
 		handleDoctor()
 	case "version":
-		fmt.Println("ai-git version 1.0.2")
+		fmt.Println("ai-git version 1.0.3")
 	default:
 		fmt.Printf("Unknown command: %s\n", command)
 		printUsage()
@@ -452,9 +452,8 @@ func handleCommit() {
 }
 
 func handlePush() {
-	err := runSpinner("Pushing changes...", func() error {
-		return git.Push()
-	})
+	fmt.Println(styleSubtle.Render("Pushing changes..."))
+	err := git.PushInteractive()
 	if err != nil {
 		fmt.Println(styleError.Render(fmt.Sprintf("Push failed: %v", err)))
 	} else {
@@ -463,9 +462,8 @@ func handlePush() {
 }
 
 func handlePull() {
-	err := runSpinner("Pulling changes...", func() error {
-		return git.Pull()
-	})
+	fmt.Println(styleSubtle.Render("Pulling changes..."))
+	err := git.PullInteractive()
 	if err != nil {
 		fmt.Println(styleError.Render(fmt.Sprintf("Pull failed: %v", err)))
 	} else {

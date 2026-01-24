@@ -2,6 +2,7 @@ package git
 
 import (
 	"bytes"
+	"os"
 	"os/exec"
 	"strings"
 )
@@ -71,7 +72,23 @@ func Push() error {
 	return cmd.Run()
 }
 
+func PushInteractive() error {
+	cmd := exec.Command("git", "push")
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
 func Pull() error {
 	cmd := exec.Command("git", "pull")
+	return cmd.Run()
+}
+
+func PullInteractive() error {
+	cmd := exec.Command("git", "pull")
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
 	return cmd.Run()
 }
