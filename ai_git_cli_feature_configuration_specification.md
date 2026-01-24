@@ -21,7 +21,8 @@ The tool runs in the current working directory and operates entirely through ter
 ## 3. Supported Platforms
 
 * Linux (x64)
-* windows (10/11)
+* Windows (10/11)
+* Mac OS
 
 ---
 
@@ -29,7 +30,7 @@ The tool runs in the current working directory and operates entirely through ter
 
 * Language: Go (Golang)
 * Distribution: Single compiled binary
-* Target OS: Linux only
+* Target OS: Linux, Windows, Mac OS
 * Configuration format: YAML (primary), JSON (optional)
 
 ---
