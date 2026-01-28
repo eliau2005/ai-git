@@ -92,3 +92,45 @@ func PullInteractive() error {
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
 }
+
+func GetBranches() ([]string, string, error) {
+	cmd := exec.Command("git", "branch")
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	err := cmd.Run()
+	if err != nil {
+		return nil, "", err
+	}
+
+	var branches []string
+	var current string
+	lines := strings.Split(out.String(), "\n")
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "* ") {
+			current = strings.TrimPrefix(trimmed, "* ")
+			branches = append(branches, current)
+		} else {
+			branches = append(branches, trimmed)
+		}
+	}
+	return branches, current, nil
+}
+
+func Checkout(branch string) error {
+	cmd := exec.Command("git", "checkout", branch)
+	return cmd.Run()
+}
+
+func CreateBranch(branch string) error {
+	cmd := exec.Command("git", "checkout", "-b", branch)
+	return cmd.Run()
+}
+
+func DeleteBranch(branch string) error {
+	cmd := exec.Command("git", "branch", "-D", branch)
+	return cmd.Run()
+}

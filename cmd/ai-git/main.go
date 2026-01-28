@@ -35,6 +35,8 @@ func main() {
 	switch command {
 	case "status":
 		handleStatus()
+	case "branch":
+		handleBranch()
 	case "add":
 		handleAdd()
 	case "commit":
@@ -52,7 +54,7 @@ func main() {
 	case "doctor":
 		handleDoctor()
 	case "version":
-		fmt.Println("ai-git version 1.0.3")
+		fmt.Println("ai-git version 1.1.0")
 	default:
 		fmt.Printf("Unknown command: %s\n", command)
 		printUsage()
@@ -65,6 +67,7 @@ func printUsage() {
 	fmt.Println("Commands:")
 	fmt.Println("  init    Initialize repository as AI-Git enabled")
 	fmt.Println("  status  Show repository status")
+	fmt.Println("  branch  Manage branches (list, create, delete, checkout)")
 	fmt.Println("  add     Stage changes (run without args for interactive mode)")
 	fmt.Println("  commit  Create commit with AI-generated message")
 	fmt.Println("  push    Push commits to remote")
@@ -136,6 +139,153 @@ func runSpinner(title string, action func() error) error {
 }
 
 // --- Commands ---
+
+func handleBranch() {
+	fmt.Println(styleTitle.Render("Branch Management"))
+
+	branches, current, err := git.GetBranches()
+	if err != nil {
+		fmt.Println(styleError.Render(fmt.Sprintf("Error fetching branches: %v", err)))
+		return
+	}
+
+	fmt.Println(styleSubtle.Render(fmt.Sprintf("Current branch: %s", styleSuccess.Render(current))))
+
+	var action string
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewSelect[string]().
+				Title("Choose an action:").
+				Options(
+					huh.NewOption("Checkout Branch", "checkout"),
+					huh.NewOption("Create New Branch", "create"),
+					huh.NewOption("Delete Branch", "delete"),
+				).
+				Value(&action),
+		),
+	)
+
+	if err := form.Run(); err != nil {
+		return
+	}
+
+	switch action {
+	case "checkout":
+		var target string
+		// Create options from branches
+		var opts []huh.Option[string]
+		for _, b := range branches {
+			title := b
+			if b == current {
+				title = fmt.Sprintf("%s (current)", b)
+			}
+			opts = append(opts, huh.NewOption(title, b))
+		}
+
+		checkoutForm := huh.NewForm(
+			huh.NewGroup(
+				huh.NewSelect[string]().
+					Title("Select branch to checkout:").
+					Options(opts...).
+					Value(&target),
+			),
+		)
+
+		if err := checkoutForm.Run(); err != nil {
+			return
+		}
+
+		if target == current {
+			fmt.Println(styleSubtle.Render("Already on this branch."))
+			return
+		}
+
+		if err := git.Checkout(target); err != nil {
+			fmt.Println(styleError.Render(fmt.Sprintf("Checkout failed: %v", err)))
+		} else {
+			fmt.Println(styleSuccess.Render(fmt.Sprintf("Switched to branch '%s'", target)))
+		}
+
+	case "create":
+		var name string
+		createForm := huh.NewForm(
+			huh.NewGroup(
+				huh.NewInput().
+					Title("Enter new branch name:").
+					Value(&name),
+			),
+		)
+
+		if err := createForm.Run(); err != nil {
+			return
+		}
+
+		if name == "" {
+			fmt.Println(styleError.Render("Branch name cannot be empty."))
+			return
+		}
+
+		if err := git.CreateBranch(name); err != nil {
+			fmt.Println(styleError.Render(fmt.Sprintf("Failed to create branch: %v", err)))
+		} else {
+			fmt.Println(styleSuccess.Render(fmt.Sprintf("Created and switched to new branch '%s'", name)))
+		}
+
+	case "delete":
+		var targets []string
+		// Filter out current branch to prevent deleting it while active (basic safety)
+		var opts []huh.Option[string]
+		for _, b := range branches {
+			if b != current {
+				opts = append(opts, huh.NewOption(b, b))
+			}
+		}
+
+		if len(opts) == 0 {
+			fmt.Println(styleSubtle.Render("No other branches to delete."))
+			return
+		}
+
+		deleteForm := huh.NewForm(
+			huh.NewGroup(
+				huh.NewMultiSelect[string]().
+					Title("Select branches to DELETE:").
+					Options(opts...).
+					Value(&targets),
+			),
+		)
+
+		if err := deleteForm.Run(); err != nil {
+			return
+		}
+
+		if len(targets) == 0 {
+			return
+		}
+
+		var confirm bool
+		confirmForm := huh.NewForm(
+			huh.NewGroup(
+				huh.NewConfirm().
+					Title(fmt.Sprintf("Are you sure you want to delete %d branch(es)?", len(targets))).
+					Description("This action cannot be undone.").
+					Value(&confirm),
+			),
+		)
+		if err := confirmForm.Run(); err != nil || !confirm {
+			fmt.Println(styleSubtle.Render("Deletion cancelled."))
+			return
+		}
+
+		for _, t := range targets {
+			if err := git.DeleteBranch(t); err != nil {
+				fmt.Println(styleError.Render(fmt.Sprintf("Failed to delete '%s': %v", t, err)))
+			} else {
+				fmt.Println(styleSuccess.Render(fmt.Sprintf("Deleted branch '%s'", t)))
+			}
+		}
+	}
+}
 
 func handleStatus() {
 	out, err := git.Status()
