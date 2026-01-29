@@ -2,10 +2,18 @@ package git
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"os/exec"
 	"strings"
 )
+
+type CommitInfo struct {
+	Hash    string
+	Message string
+	Author  string
+	Time    string
+}
 
 func IsRepo() bool {
 	cmd := exec.Command("git", "rev-parse", "--is-inside-work-tree")
@@ -133,4 +141,44 @@ func CreateBranch(branch string) error {
 func DeleteBranch(branch string) error {
 	cmd := exec.Command("git", "branch", "-D", branch)
 	return cmd.Run()
+}
+
+func GetLog(limit int) ([]CommitInfo, error) {
+	// Format: Hash|Subject|Author|RelativeTime
+	cmd := exec.Command("git", "log", fmt.Sprintf("-n%d", limit), "--pretty=format:%h|%s|%an|%ar")
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	err := cmd.Run()
+	if err != nil {
+		return nil, err
+	}
+
+	var commits []CommitInfo
+	lines := strings.Split(out.String(), "\n")
+	for _, line := range lines {
+		parts := strings.Split(line, "|")
+		if len(parts) >= 4 {
+			commits = append(commits, CommitInfo{
+				Hash:    parts[0],
+				Message: parts[1],
+				Author:  parts[2],
+				Time:    parts[3],
+			})
+		}
+	}
+	return commits, nil
+}
+
+func CheckoutCommit(hash string) error {
+	cmd := exec.Command("git", "checkout", hash)
+	// We want to see output/errors if checkout fails (e.g. dirty working tree)
+	// But we'll handle it via error return mostly.
+	// For safety, let's capture stderr
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	if err != nil {
+		return fmt.Errorf("%v: %s", err, stderr.String())
+	}
+	return nil
 }

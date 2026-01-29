@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -35,6 +36,8 @@ func main() {
 	switch command {
 	case "status":
 		handleStatus()
+	case "log":
+		handleLog()
 	case "branch":
 		handleBranch()
 	case "add":
@@ -54,7 +57,7 @@ func main() {
 	case "doctor":
 		handleDoctor()
 	case "version":
-		fmt.Println("ai-git version 1.1.0")
+		fmt.Println("ai-git version 1.2.0")
 	default:
 		fmt.Printf("Unknown command: %s\n", command)
 		printUsage()
@@ -67,6 +70,7 @@ func printUsage() {
 	fmt.Println("Commands:")
 	fmt.Println("  init    Initialize repository as AI-Git enabled")
 	fmt.Println("  status  Show repository status")
+	fmt.Println("  log     View commit history and restore versions")
 	fmt.Println("  branch  Manage branches (list, create, delete, checkout)")
 	fmt.Println("  add     Stage changes (run without args for interactive mode)")
 	fmt.Println("  commit  Create commit with AI-generated message")
@@ -599,6 +603,117 @@ func handleCommit() {
 		return
 	}
 	fmt.Println(styleSuccess.Render("Committed successfully."))
+}
+
+func handleLog() {
+	fmt.Println(styleTitle.Render("Git Log"))
+
+	limit := 10
+	if len(os.Args) > 2 {
+		if l, err := strconv.Atoi(os.Args[2]); err == nil && l > 0 {
+			limit = l
+		}
+	}
+
+	commits, err := git.GetLog(limit)
+	if err != nil {
+		fmt.Println(styleError.Render(fmt.Sprintf("Error getting log: %v", err)))
+		return
+	}
+
+	if len(commits) == 0 {
+		fmt.Println(styleSubtle.Render("No commits found."))
+		return
+	}
+
+	var options []huh.Option[string]
+	commitMap := make(map[string]git.CommitInfo)
+
+	for _, c := range commits {
+		// Display format: Hash - Message (Time by Author)
+		msg := c.Message
+		if len(msg) > 50 {
+			msg = msg[:47] + "..."
+		}
+		// Using a simplified label string to avoid complex rendering inside the Option text which might break alignment
+		label := fmt.Sprintf("%s - %s (%s)", c.Hash, msg, c.Time)
+		options = append(options, huh.NewOption(label, c.Hash))
+		commitMap[c.Hash] = c
+	}
+
+	var selectedHash string
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewSelect[string]().
+				Title(fmt.Sprintf("History (Last %d)", limit)).
+				Description("Select to view/restore").
+				Options(options...).
+				Value(&selectedHash).
+				Height(10),
+		),
+	)
+
+	if err := form.Run(); err != nil {
+		return
+	}
+
+	if selectedHash == "" {
+		return
+	}
+
+	c := commitMap[selectedHash]
+
+	// Show Details
+	fmt.Println(lipgloss.NewStyle().MarginTop(1).Border(lipgloss.RoundedBorder()).Padding(0, 1).Render(
+		lipgloss.JoinVertical(lipgloss.Left,
+			lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("212")).Render("Commit Details"),
+			fmt.Sprintf("Hash:   %s", c.Hash),
+			fmt.Sprintf("Author: %s", c.Author),
+			fmt.Sprintf("Date:   %s", c.Time),
+			"",
+			c.Message,
+		),
+	))
+
+	var action string
+	actionForm := huh.NewForm(
+		huh.NewGroup(
+			huh.NewSelect[string]().
+				Title("Action").
+				Options(
+					huh.NewOption("Restore this version", "restore"),
+					huh.NewOption("Back / Cancel", "cancel"),
+				).
+				Value(&action),
+		),
+	)
+
+	if err := actionForm.Run(); err != nil || action == "cancel" {
+		return
+	}
+
+	if action == "restore" {
+		var confirm bool
+		confirmForm := huh.NewForm(
+			huh.NewGroup(
+				huh.NewConfirm().
+					Title("Restore project to this version?").
+					Description("You will enter 'detached HEAD' state.").
+					Value(&confirm),
+			),
+		)
+
+		if err := confirmForm.Run(); err != nil || !confirm {
+			fmt.Println(styleSubtle.Render("Cancelled."))
+			return
+		}
+
+		if err := git.CheckoutCommit(selectedHash); err != nil {
+			fmt.Println(styleError.Render(fmt.Sprintf("Restore failed: %v", err)))
+		} else {
+			fmt.Println(styleSuccess.Render(fmt.Sprintf("Restored to %s", selectedHash)))
+		}
+	}
 }
 
 func handlePush() {
