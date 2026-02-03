@@ -143,6 +143,20 @@ func DeleteBranch(branch string) error {
 	return cmd.Run()
 }
 
+func Diff(file string) (string, error) {
+	// Use --color=always for ANSI colors if possible, but viewport handles basic text better without raw escape codes unless we parse them.
+	// Actually, bubbletea viewport handles ANSI codes fine usually.
+	// Let's try with color first.
+	cmd := exec.Command("git", "diff", "--color=always", file)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	err := cmd.Run()
+	if err != nil {
+		return "", err
+	}
+	return out.String(), nil
+}
+
 func GetLog(limit int) ([]CommitInfo, error) {
 	// Format: Hash|Subject|Author|RelativeTime
 	cmd := exec.Command("git", "log", fmt.Sprintf("-n%d", limit), "--pretty=format:%h|%s|%an|%ar")

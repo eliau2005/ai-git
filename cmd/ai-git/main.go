@@ -3,12 +3,14 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
@@ -57,7 +59,7 @@ func main() {
 	case "doctor":
 		handleDoctor()
 	case "version":
-		fmt.Println("ai-git version 1.2.0")
+		fmt.Println("ai-git version 1.3.0")
 	default:
 		fmt.Printf("Unknown command: %s\n", command)
 		printUsage()
@@ -312,8 +314,7 @@ func handleAdd() {
 		return
 	}
 
-	// Interactive Mode
-	fmt.Println(styleTitle.Render("Interactive Stage"))
+	// Interactive Mode with Diff
 	statusShort, err := git.StatusShort()
 	if err != nil {
 		fmt.Println(styleError.Render(fmt.Sprintf("Error getting status: %v", err)))
@@ -326,34 +327,29 @@ func handleAdd() {
 		return
 	}
 
-	var selectedFiles []string
-	var options []huh.Option[string]
-	for _, f := range files {
-		options = append(options, huh.NewOption(f, f))
-	}
-
-	form := huh.NewForm(
-		huh.NewGroup(
-			huh.NewMultiSelect[string]().
-				Title("Select files to stage:").
-				Options(options...).
-				Value(&selectedFiles),
-		),
-	)
-
-	err = form.Run()
+	m := initialInteractiveAddModel(files)
+	p := tea.NewProgram(m, tea.WithAltScreen())
+	finalModel, err := p.Run()
 	if err != nil {
+		fmt.Println(styleError.Render(fmt.Sprintf("Error: %v", err)))
 		return
 	}
 
-	if len(selectedFiles) == 0 {
+	// Check results
+	fm := finalModel.(interactiveAddModel)
+	if fm.abort {
+		fmt.Println("Aborted.")
+		return
+	}
+
+	if len(fm.selected) == 0 {
 		fmt.Println("No files selected.")
 		return
 	}
 
 	err = runSpinner("Staging files...", func() error {
-		for _, f := range selectedFiles {
-			if err := git.Add(f); err != nil {
+		for i := range fm.selected {
+			if err := git.Add(fm.files[i]); err != nil {
 				return err
 			}
 		}
@@ -367,23 +363,153 @@ func handleAdd() {
 	}
 }
 
+// --- Interactive Add Model ---
+
+type interactiveAddModel struct {
+	files       []string
+	selected    map[int]bool
+	cursor      int
+	viewingDiff bool
+	diffContent string
+	viewport    viewport.Model
+	width       int
+	height      int
+	abort       bool
+	quitting    bool
+}
+
+func initialInteractiveAddModel(files []string) interactiveAddModel {
+	return interactiveAddModel{
+		files:    files,
+		selected: make(map[int]bool),
+		cursor:   0,
+	}
+}
+
+func (m interactiveAddModel) Init() tea.Cmd {
+	return nil
+}
+
+func (m interactiveAddModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		m.viewport.Width = msg.Width
+		m.viewport.Height = msg.Height - 4 // Header + Footer
+		return m, nil
+
+	case tea.KeyMsg:
+		if m.viewingDiff {
+			// Diff View Mode
+			switch msg.String() {
+			case "q", "esc", "v", "enter":
+				m.viewingDiff = false
+				return m, nil
+			default:
+				m.viewport, cmd = m.viewport.Update(msg)
+				return m, cmd
+			}
+		} else {
+			// Selection Mode
+			switch msg.String() {
+			case "q", "ctrl+c":
+				m.abort = true
+				m.quitting = true
+				return m, tea.Quit
+			case "up", "k":
+				if m.cursor > 0 {
+					m.cursor--
+				}
+			case "down", "j":
+				if m.cursor < len(m.files)-1 {
+					m.cursor++
+				}
+			case " ":
+				if m.selected[m.cursor] {
+					delete(m.selected, m.cursor)
+				} else {
+					m.selected[m.cursor] = true
+				}
+			case "v", "enter":
+				// Load diff
+				content, err := git.Diff(m.files[m.cursor])
+				if err != nil {
+					m.diffContent = fmt.Sprintf("Error loading diff: %v", err)
+				} else {
+					m.diffContent = content
+				}
+				m.viewport = viewport.New(m.width, m.height-4)
+				m.viewport.SetContent(m.diffContent)
+				m.viewingDiff = true
+			case "c": // Commit/Confirm selection
+				m.quitting = true
+				return m, tea.Quit
+			}
+		}
+	}
+	return m, nil
+}
+
+func (m interactiveAddModel) View() string {
+	if m.quitting {
+		return ""
+	}
+
+	if m.viewingDiff {
+		header := styleTitle.Render(fmt.Sprintf("Diff: %s", m.files[m.cursor]))
+		footer := styleSubtle.Render(" [q/esc] Back ")
+		return fmt.Sprintf("%s\n%s\n%s", header, m.viewport.View(), footer)
+	}
+
+	var s strings.Builder
+	s.WriteString(styleTitle.Render("Select Files to Stage") + "\n\n")
+
+	for i, file := range m.files {
+		cursor := "  "
+		if m.cursor == i {
+			cursor = styleTitle.Foreground(lipgloss.Color("205")).Render("> ")
+		}
+
+		checked := "[ ]"
+		if m.selected[i] {
+			checked = styleSuccess.Render("[x]")
+		}
+
+		// Highlight current line
+		line := fmt.Sprintf("%s%s %s", cursor, checked, file)
+		if m.cursor == i {
+			line = lipgloss.NewStyle().Bold(true).Render(line)
+		}
+
+		s.WriteString(line + "\n")
+	}
+
+	s.WriteString("\n" + styleSubtle.Render(" [Space] Toggle  [v] View Diff  [c] Confirm/Stage  [q] Quit"))
+	return s.String()
+}
+
 // --- Spinner for AI (Specific) ---
 
 
 type aiSpinnerModel struct {
-	spinner   spinner.Model
-	diff      string
-	provider  provider.Provider
-	msgResult string
-	err       error
-	done      bool
+	spinner    spinner.Model
+	diff       string
+	provider   provider.Provider
+	msgResult  string
+	err        error
+	done       bool
+	tokenCount int
 }
 
 func initialAISpinner(p provider.Provider, diff string) aiSpinnerModel {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
-	return aiSpinnerModel{spinner: s, diff: diff, provider: p}
+	tokens := estimateTokens(diff)
+	return aiSpinnerModel{spinner: s, diff: diff, provider: p, tokenCount: tokens}
 }
 
 func (m aiSpinnerModel) Init() tea.Cmd {
@@ -421,7 +547,13 @@ func (m aiSpinnerModel) View() string {
 	if m.done {
 		return ""
 	}
-	return fmt.Sprintf("\n %s AI is thinking...\n\n", m.spinner.View())
+	tokenStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	if m.tokenCount > 15000 {
+		tokenStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#FF5F87")).Bold(true)
+	}
+	tokenBadge := tokenStyle.Render(fmt.Sprintf(" (~%d tokens)", m.tokenCount))
+	
+	return fmt.Sprintf("\n %s AI is thinking...%s\n\n", m.spinner.View(), tokenBadge)
 }
 
 func handleCommit() {
@@ -570,6 +702,7 @@ func handleCommit() {
 					Options(
 						huh.NewOption("Commit", "commit").Selected(true),
 						huh.NewOption("Edit", "edit"),
+						huh.NewOption("Edit in Editor", "editor"),
 						huh.NewOption("Cancel", "cancel"),
 					).
 					Value(&action),
@@ -594,6 +727,20 @@ func handleCommit() {
 				),
 			)
 			f.Run()
+		}
+		if action == "editor" {
+			currentFull := fmt.Sprintf("%s\n\n%s", title, description)
+			newContent, err := openInEditor(currentFull)
+			if err != nil {
+				fmt.Println(styleError.Render(fmt.Sprintf("Editor error: %v", err)))
+			} else {
+				parts := strings.SplitN(newContent, "\n", 2)
+				title = strings.TrimSpace(parts[0])
+				description = ""
+				if len(parts) > 1 {
+					description = strings.TrimSpace(parts[1])
+				}
+			}
 		}
 	}
 
@@ -940,4 +1087,48 @@ func parseGitStatusFiles(status string) []string {
 		}
 	}
 	return files
+}
+
+func estimateTokens(text string) int {
+	return len(text) / 4
+}
+
+func openInEditor(initialContent string) (string, error) {
+	editor := os.Getenv("EDITOR")
+	if editor == "" {
+		editor = "vim" // Default fallback
+		if _, err := exec.LookPath("nano"); err == nil {
+			editor = "nano"
+		}
+		if _, err := exec.LookPath("notepad"); err == nil {
+			editor = "notepad"
+		}
+	}
+
+	tmpFile, err := os.CreateTemp("", "AI_GIT_COMMIT_EDITMSG")
+	if err != nil {
+		return "", err
+	}
+	defer os.Remove(tmpFile.Name())
+
+	if _, err := tmpFile.WriteString(initialContent); err != nil {
+		return "", err
+	}
+	tmpFile.Close()
+
+	cmd := exec.Command(editor, tmpFile.Name())
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("failed to open editor: %w", err)
+	}
+
+	content, err := os.ReadFile(tmpFile.Name())
+	if err != nil {
+		return "", err
+	}
+
+	return string(content), nil
 }
