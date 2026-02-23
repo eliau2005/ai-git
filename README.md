@@ -24,10 +24,10 @@ If you have Go configured on your machine, this is the fastest method (Works on 
 Run this command to bypass the cache and get the latest version:
 ```bash
 # Linux/macOS
-GOPROXY=direct go install github.com/eliau2005/ai-git/cmd/ai-git@latest
+go install github.com/eliau2005/ai-git/cmd/ai-git@latest
 
 # Windows (PowerShell)
-$env:GOPROXY="direct"; go install github.com/eliau2005/ai-git/cmd/ai-git@latest
+go install github.com/eliau2005/ai-git/cmd/ai-git@latest
 ```
 *Note: Ensure your Go Bin directory is in your PATH.*
 
