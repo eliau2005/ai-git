@@ -163,7 +163,10 @@ func handleBranch() {
 			huh.NewSelect[string]().
 				Title("Choose an action:").
 				Options(
+					huh.NewOption("List All Branches (Local & Remote)", "list"),
 					huh.NewOption("Checkout Branch", "checkout"),
+					huh.NewOption("Checkout Remote Branch", "checkout-remote"),
+					huh.NewOption("Publish Branch (Push to Remote)", "publish"),
 					huh.NewOption("Create New Branch", "create"),
 					huh.NewOption("Delete Branch", "delete"),
 				).
@@ -176,6 +179,31 @@ func handleBranch() {
 	}
 
 	switch action {
+	case "list":
+		local, remote, cur, err := git.GetAllBranches()
+		if err != nil {
+			fmt.Println(styleError.Render(fmt.Sprintf("Error fetching branches: %v", err)))
+			return
+		}
+		boldStyle := lipgloss.NewStyle().Bold(true)
+		fmt.Println(boldStyle.Render("💻 Local Branches:"))
+		for _, b := range local {
+			if b == cur {
+				fmt.Println(styleSuccess.Render("* ") + b)
+			} else {
+				fmt.Println("  " + b)
+			}
+		}
+		fmt.Println()
+		fmt.Println(boldStyle.Render("☁️  Remote Branches:"))
+		if len(remote) == 0 {
+			fmt.Println(styleSubtle.Render("No remote branches found."))
+		} else {
+			for _, b := range remote {
+				fmt.Println("  " + b)
+			}
+		}
+
 	case "checkout":
 		var target string
 		// Create options from branches
@@ -210,6 +238,65 @@ func handleBranch() {
 			fmt.Println(styleError.Render(fmt.Sprintf("Checkout failed: %v", err)))
 		} else {
 			fmt.Println(styleSuccess.Render(fmt.Sprintf("Switched to branch '%s'", target)))
+		}
+
+	case "checkout-remote":
+		_, remote, _, err := git.GetAllBranches()
+		if err != nil {
+			fmt.Println(styleError.Render(fmt.Sprintf("Error fetching remote branches: %v", err)))
+			return
+		}
+		if len(remote) == 0 {
+			fmt.Println(styleSubtle.Render("No remote branches found."))
+			return
+		}
+		var remoteTarget string
+		var remoteOpts []huh.Option[string]
+		for _, b := range remote {
+			remoteOpts = append(remoteOpts, huh.NewOption(b, b))
+		}
+		remoteForm := huh.NewForm(
+			huh.NewGroup(
+				huh.NewSelect[string]().
+					Title("Select remote branch to checkout:").
+					Options(remoteOpts...).
+					Value(&remoteTarget),
+			),
+		)
+		if err := remoteForm.Run(); err != nil {
+			return
+		}
+		if err := git.CheckoutRemoteBranch(remoteTarget); err != nil {
+			fmt.Println(styleError.Render(fmt.Sprintf("Checkout failed: %v", err)))
+		} else {
+			// local branch name is the part after the last "/"
+			parts := strings.SplitN(remoteTarget, "/", 2)
+			localName := parts[len(parts)-1]
+			fmt.Println(styleSuccess.Render(fmt.Sprintf("Switched to new branch '%s' tracking '%s'", localName, remoteTarget)))
+		}
+
+	case "publish":
+		var publishTarget string
+		var publishOpts []huh.Option[string]
+		for _, b := range branches {
+			publishOpts = append(publishOpts, huh.NewOption(b, b))
+		}
+		publishForm := huh.NewForm(
+			huh.NewGroup(
+				huh.NewSelect[string]().
+					Title("Select local branch to publish:").
+					Options(publishOpts...).
+					Value(&publishTarget),
+			),
+		)
+		if err := publishForm.Run(); err != nil {
+			return
+		}
+		fmt.Println(styleSubtle.Render(fmt.Sprintf("Publishing branch '%s'...", publishTarget)))
+		if err := git.PublishBranch(publishTarget); err != nil {
+			fmt.Println(styleError.Render(fmt.Sprintf("Publish failed: %v", err)))
+		} else {
+			fmt.Println(styleSuccess.Render(fmt.Sprintf("Branch '%s' published to origin.", publishTarget)))
 		}
 
 	case "create":
