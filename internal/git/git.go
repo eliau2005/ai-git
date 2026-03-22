@@ -128,8 +128,64 @@ func GetBranches() ([]string, string, error) {
 	return branches, current, nil
 }
 
+func GetAllBranches() ([]string, []string, string, error) {
+	cmd := exec.Command("git", "branch", "-a")
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	err := cmd.Run()
+	if err != nil {
+		return nil, nil, "", err
+	}
+
+	var local, remote []string
+	var current string
+	lines := strings.Split(out.String(), "\n")
+	for _, line := range lines {
+		if strings.Contains(line, "->") {
+			continue
+		}
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		isCurrent := strings.HasPrefix(trimmed, "* ")
+		if isCurrent {
+			trimmed = strings.TrimPrefix(trimmed, "* ")
+		}
+		if strings.HasPrefix(trimmed, "remotes/") {
+			trimmed = strings.TrimPrefix(trimmed, "remotes/")
+			remote = append(remote, trimmed)
+		} else {
+			if isCurrent {
+				current = trimmed
+			}
+			local = append(local, trimmed)
+		}
+	}
+	return local, remote, current, nil
+}
+
 func Checkout(branch string) error {
 	cmd := exec.Command("git", "checkout", branch)
+	return cmd.Run()
+}
+
+func CheckoutRemoteBranch(remoteBranch string) error {
+	cmd := exec.Command("git", "checkout", "--track", remoteBranch)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	if err != nil {
+		return fmt.Errorf("%v: %s", err, stderr.String())
+	}
+	return nil
+}
+
+func PublishBranch(branch string) error {
+	cmd := exec.Command("git", "push", "--set-upstream", "origin", branch)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
 	return cmd.Run()
 }
 
