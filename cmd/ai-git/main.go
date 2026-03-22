@@ -702,7 +702,7 @@ func handleCommit() {
 					Options(options...).
 					Value(&selectedFiles),
 			),
-		)
+		).WithShowHelp(true)
 
 		if err := form.Run(); err != nil {
 			return
@@ -811,19 +811,15 @@ func handleCommit() {
 						huh.NewOption("Commit", "commit").Selected(true),
 						huh.NewOption("Edit", "edit"),
 						huh.NewOption("Edit in Editor", "editor"),
-						huh.NewOption("Cancel", "cancel"),
 					).
 					Value(&action),
 			),
-		)
+		).WithShowHelp(true)
 
 		if err := form.Run(); err != nil {
 			return
 		}
 
-		if action == "cancel" {
-			return
-		}
 		if action == "commit" {
 			break
 		}
@@ -833,8 +829,10 @@ func handleCommit() {
 					huh.NewInput().Title("Title").Value(&title),
 					huh.NewInput().Title("Description").Value(&description),
 				),
-			)
-			f.Run()
+			).WithShowHelp(true)
+			if err := f.Run(); err != nil && !errors.Is(err, huh.ErrUserAborted) {
+				return
+			}
 		}
 		if action == "editor" {
 			currentFull := fmt.Sprintf("%s\n\n%s", title, description)
@@ -1002,8 +1000,8 @@ func handlePull() {
 func handleSync() {
 	handleCommit()
 	var confirm bool
-	huh.NewForm(huh.NewGroup(huh.NewConfirm().Title("Push changes?").Value(&confirm))).Run()
-	if confirm {
+	err := huh.NewForm(huh.NewGroup(huh.NewConfirm().Title("Push changes?").Value(&confirm))).WithShowHelp(true).Run()
+	if err == nil && confirm {
 		handlePush()
 	}
 }
