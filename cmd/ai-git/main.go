@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -157,224 +158,244 @@ func handleBranch() {
 
 	fmt.Println(styleSubtle.Render(fmt.Sprintf("Current branch: %s", styleSuccess.Render(current))))
 
-	var action string
-	form := huh.NewForm(
-		huh.NewGroup(
-			huh.NewSelect[string]().
-				Title("Choose an action:").
-				Options(
-					huh.NewOption("List All Branches (Local & Remote)", "list"),
-					huh.NewOption("Checkout Branch", "checkout"),
-					huh.NewOption("Checkout Remote Branch", "checkout-remote"),
-					huh.NewOption("Publish Branch (Push to Remote)", "publish"),
-					huh.NewOption("Create New Branch", "create"),
-					huh.NewOption("Delete Branch", "delete"),
-				).
-				Value(&action),
-		),
-	)
+	for {
+		var action string
+		form := huh.NewForm(
+			huh.NewGroup(
+				huh.NewSelect[string]().
+					Title("Choose an action:").
+					Options(
+						huh.NewOption("List All Branches (Local & Remote)", "list"),
+						huh.NewOption("Checkout Branch", "checkout"),
+						huh.NewOption("Checkout Remote Branch", "checkout-remote"),
+						huh.NewOption("Publish Branch (Push to Remote)", "publish"),
+						huh.NewOption("Create New Branch", "create"),
+						huh.NewOption("Delete Branch", "delete"),
+					).
+					Value(&action),
+			),
+		).WithShowHelp(true)
 
-	if err := form.Run(); err != nil {
-		return
-	}
-
-	switch action {
-	case "list":
-		local, remote, cur, err := git.GetAllBranches()
-		if err != nil {
-			fmt.Println(styleError.Render(fmt.Sprintf("Error fetching branches: %v", err)))
+		if err := form.Run(); err != nil {
 			return
 		}
-		boldStyle := lipgloss.NewStyle().Bold(true)
-		fmt.Println(boldStyle.Render("💻 Local Branches:"))
-		for _, b := range local {
-			if b == cur {
-				fmt.Println(styleSuccess.Render("* ") + b)
-			} else {
-				fmt.Println("  " + b)
+
+		switch action {
+		case "list":
+			local, remote, cur, err := git.GetAllBranches()
+			if err != nil {
+				fmt.Println(styleError.Render(fmt.Sprintf("Error fetching branches: %v", err)))
+				continue
 			}
-		}
-		fmt.Println()
-		fmt.Println(boldStyle.Render("☁️  Remote Branches:"))
-		if len(remote) == 0 {
-			fmt.Println(styleSubtle.Render("No remote branches found."))
-		} else {
+			boldStyle := lipgloss.NewStyle().Bold(true)
+			fmt.Println(boldStyle.Render("💻 Local Branches:"))
+			for _, b := range local {
+				if b == cur {
+					fmt.Println(styleSuccess.Render("* ") + b)
+				} else {
+					fmt.Println("  " + b)
+				}
+			}
+			fmt.Println()
+			fmt.Println(boldStyle.Render("☁️  Remote Branches:"))
+			if len(remote) == 0 {
+				fmt.Println(styleSubtle.Render("No remote branches found."))
+			} else {
+				for _, b := range remote {
+					fmt.Println("  " + b)
+				}
+			}
+
+		case "checkout":
+			var target string
+			var opts []huh.Option[string]
+			for _, b := range branches {
+				title := b
+				if b == current {
+					title = fmt.Sprintf("%s (current)", b)
+				}
+				opts = append(opts, huh.NewOption(title, b))
+			}
+
+			checkoutForm := huh.NewForm(
+				huh.NewGroup(
+					huh.NewSelect[string]().
+						Title("Select branch to checkout:").
+						Options(opts...).
+						Value(&target),
+				),
+			).WithShowHelp(true)
+
+			if err := checkoutForm.Run(); err != nil {
+				if errors.Is(err, huh.ErrUserAborted) {
+					continue
+				}
+				return
+			}
+
+			if target == current {
+				fmt.Println(styleSubtle.Render("Already on this branch."))
+				continue
+			}
+
+			if err := git.Checkout(target); err != nil {
+				fmt.Println(styleError.Render(fmt.Sprintf("Checkout failed: %v", err)))
+			} else {
+				fmt.Println(styleSuccess.Render(fmt.Sprintf("Switched to branch '%s'", target)))
+			}
+
+		case "checkout-remote":
+			_, remote, _, err := git.GetAllBranches()
+			if err != nil {
+				fmt.Println(styleError.Render(fmt.Sprintf("Error fetching remote branches: %v", err)))
+				continue
+			}
+			if len(remote) == 0 {
+				fmt.Println(styleSubtle.Render("No remote branches found."))
+				continue
+			}
+			var remoteTarget string
+			var remoteOpts []huh.Option[string]
 			for _, b := range remote {
-				fmt.Println("  " + b)
+				remoteOpts = append(remoteOpts, huh.NewOption(b, b))
 			}
-		}
-
-	case "checkout":
-		var target string
-		// Create options from branches
-		var opts []huh.Option[string]
-		for _, b := range branches {
-			title := b
-			if b == current {
-				title = fmt.Sprintf("%s (current)", b)
+			remoteForm := huh.NewForm(
+				huh.NewGroup(
+					huh.NewSelect[string]().
+						Title("Select remote branch to checkout:").
+						Options(remoteOpts...).
+						Value(&remoteTarget),
+				),
+			).WithShowHelp(true)
+			if err := remoteForm.Run(); err != nil {
+				if errors.Is(err, huh.ErrUserAborted) {
+					continue
+				}
+				return
 			}
-			opts = append(opts, huh.NewOption(title, b))
-		}
-
-		checkoutForm := huh.NewForm(
-			huh.NewGroup(
-				huh.NewSelect[string]().
-					Title("Select branch to checkout:").
-					Options(opts...).
-					Value(&target),
-			),
-		)
-
-		if err := checkoutForm.Run(); err != nil {
-			return
-		}
-
-		if target == current {
-			fmt.Println(styleSubtle.Render("Already on this branch."))
-			return
-		}
-
-		if err := git.Checkout(target); err != nil {
-			fmt.Println(styleError.Render(fmt.Sprintf("Checkout failed: %v", err)))
-		} else {
-			fmt.Println(styleSuccess.Render(fmt.Sprintf("Switched to branch '%s'", target)))
-		}
-
-	case "checkout-remote":
-		_, remote, _, err := git.GetAllBranches()
-		if err != nil {
-			fmt.Println(styleError.Render(fmt.Sprintf("Error fetching remote branches: %v", err)))
-			return
-		}
-		if len(remote) == 0 {
-			fmt.Println(styleSubtle.Render("No remote branches found."))
-			return
-		}
-		var remoteTarget string
-		var remoteOpts []huh.Option[string]
-		for _, b := range remote {
-			remoteOpts = append(remoteOpts, huh.NewOption(b, b))
-		}
-		remoteForm := huh.NewForm(
-			huh.NewGroup(
-				huh.NewSelect[string]().
-					Title("Select remote branch to checkout:").
-					Options(remoteOpts...).
-					Value(&remoteTarget),
-			),
-		)
-		if err := remoteForm.Run(); err != nil {
-			return
-		}
-		if err := git.CheckoutRemoteBranch(remoteTarget); err != nil {
-			fmt.Println(styleError.Render(fmt.Sprintf("Checkout failed: %v", err)))
-		} else {
-			// local branch name is the part after the last "/"
-			parts := strings.SplitN(remoteTarget, "/", 2)
-			localName := parts[len(parts)-1]
-			fmt.Println(styleSuccess.Render(fmt.Sprintf("Switched to new branch '%s' tracking '%s'", localName, remoteTarget)))
-		}
-
-	case "publish":
-		var publishTarget string
-		var publishOpts []huh.Option[string]
-		for _, b := range branches {
-			publishOpts = append(publishOpts, huh.NewOption(b, b))
-		}
-		publishForm := huh.NewForm(
-			huh.NewGroup(
-				huh.NewSelect[string]().
-					Title("Select local branch to publish:").
-					Options(publishOpts...).
-					Value(&publishTarget),
-			),
-		)
-		if err := publishForm.Run(); err != nil {
-			return
-		}
-		fmt.Println(styleSubtle.Render(fmt.Sprintf("Publishing branch '%s'...", publishTarget)))
-		if err := git.PublishBranch(publishTarget); err != nil {
-			fmt.Println(styleError.Render(fmt.Sprintf("Publish failed: %v", err)))
-		} else {
-			fmt.Println(styleSuccess.Render(fmt.Sprintf("Branch '%s' published to origin.", publishTarget)))
-		}
-
-	case "create":
-		var name string
-		createForm := huh.NewForm(
-			huh.NewGroup(
-				huh.NewInput().
-					Title("Enter new branch name:").
-					Value(&name),
-			),
-		)
-
-		if err := createForm.Run(); err != nil {
-			return
-		}
-
-		if name == "" {
-			fmt.Println(styleError.Render("Branch name cannot be empty."))
-			return
-		}
-
-		if err := git.CreateBranch(name); err != nil {
-			fmt.Println(styleError.Render(fmt.Sprintf("Failed to create branch: %v", err)))
-		} else {
-			fmt.Println(styleSuccess.Render(fmt.Sprintf("Created and switched to new branch '%s'", name)))
-		}
-
-	case "delete":
-		var targets []string
-		// Filter out current branch to prevent deleting it while active (basic safety)
-		var opts []huh.Option[string]
-		for _, b := range branches {
-			if b != current {
-				opts = append(opts, huh.NewOption(b, b))
-			}
-		}
-
-		if len(opts) == 0 {
-			fmt.Println(styleSubtle.Render("No other branches to delete."))
-			return
-		}
-
-		deleteForm := huh.NewForm(
-			huh.NewGroup(
-				huh.NewMultiSelect[string]().
-					Title("Select branches to DELETE:").
-					Options(opts...).
-					Value(&targets),
-			),
-		)
-
-		if err := deleteForm.Run(); err != nil {
-			return
-		}
-
-		if len(targets) == 0 {
-			return
-		}
-
-		var confirm bool
-		confirmForm := huh.NewForm(
-			huh.NewGroup(
-				huh.NewConfirm().
-					Title(fmt.Sprintf("Are you sure you want to delete %d branch(es)?", len(targets))).
-					Description("This action cannot be undone.").
-					Value(&confirm),
-			),
-		)
-		if err := confirmForm.Run(); err != nil || !confirm {
-			fmt.Println(styleSubtle.Render("Deletion cancelled."))
-			return
-		}
-
-		for _, t := range targets {
-			if err := git.DeleteBranch(t); err != nil {
-				fmt.Println(styleError.Render(fmt.Sprintf("Failed to delete '%s': %v", t, err)))
+			if err := git.CheckoutRemoteBranch(remoteTarget); err != nil {
+				fmt.Println(styleError.Render(fmt.Sprintf("Checkout failed: %v", err)))
 			} else {
-				fmt.Println(styleSuccess.Render(fmt.Sprintf("Deleted branch '%s'", t)))
+				parts := strings.SplitN(remoteTarget, "/", 2)
+				localName := parts[len(parts)-1]
+				fmt.Println(styleSuccess.Render(fmt.Sprintf("Switched to new branch '%s' tracking '%s'", localName, remoteTarget)))
+			}
+
+		case "publish":
+			var publishTarget string
+			var publishOpts []huh.Option[string]
+			for _, b := range branches {
+				publishOpts = append(publishOpts, huh.NewOption(b, b))
+			}
+			publishForm := huh.NewForm(
+				huh.NewGroup(
+					huh.NewSelect[string]().
+						Title("Select local branch to publish:").
+						Options(publishOpts...).
+						Value(&publishTarget),
+				),
+			).WithShowHelp(true)
+			if err := publishForm.Run(); err != nil {
+				if errors.Is(err, huh.ErrUserAborted) {
+					continue
+				}
+				return
+			}
+			fmt.Println(styleSubtle.Render(fmt.Sprintf("Publishing branch '%s'...", publishTarget)))
+			if err := git.PublishBranch(publishTarget); err != nil {
+				fmt.Println(styleError.Render(fmt.Sprintf("Publish failed: %v", err)))
+			} else {
+				fmt.Println(styleSuccess.Render(fmt.Sprintf("Branch '%s' published to origin.", publishTarget)))
+			}
+
+		case "create":
+			var name string
+			createForm := huh.NewForm(
+				huh.NewGroup(
+					huh.NewInput().
+						Title("Enter new branch name:").
+						Value(&name),
+				),
+			).WithShowHelp(true)
+
+			if err := createForm.Run(); err != nil {
+				if errors.Is(err, huh.ErrUserAborted) {
+					continue
+				}
+				return
+			}
+
+			if name == "" {
+				fmt.Println(styleError.Render("Branch name cannot be empty."))
+				continue
+			}
+
+			if err := git.CreateBranch(name); err != nil {
+				fmt.Println(styleError.Render(fmt.Sprintf("Failed to create branch: %v", err)))
+			} else {
+				fmt.Println(styleSuccess.Render(fmt.Sprintf("Created and switched to new branch '%s'", name)))
+			}
+
+		case "delete":
+			var targets []string
+			var opts []huh.Option[string]
+			for _, b := range branches {
+				if b != current {
+					opts = append(opts, huh.NewOption(b, b))
+				}
+			}
+
+			if len(opts) == 0 {
+				fmt.Println(styleSubtle.Render("No other branches to delete."))
+				continue
+			}
+
+			deleteForm := huh.NewForm(
+				huh.NewGroup(
+					huh.NewMultiSelect[string]().
+						Title("Select branches to DELETE:").
+						Options(opts...).
+						Value(&targets),
+				),
+			).WithShowHelp(true)
+
+			if err := deleteForm.Run(); err != nil {
+				if errors.Is(err, huh.ErrUserAborted) {
+					continue
+				}
+				return
+			}
+
+			if len(targets) == 0 {
+				continue
+			}
+
+			var confirm bool
+			confirmForm := huh.NewForm(
+				huh.NewGroup(
+					huh.NewConfirm().
+						Title(fmt.Sprintf("Are you sure you want to delete %d branch(es)?", len(targets))).
+						Description("This action cannot be undone.").
+						Value(&confirm),
+				),
+			).WithShowHelp(true)
+			if err := confirmForm.Run(); err != nil {
+				if errors.Is(err, huh.ErrUserAborted) {
+					continue
+				}
+				return
+			}
+			if !confirm {
+				fmt.Println(styleSubtle.Render("Deletion cancelled."))
+				continue
+			}
+
+			for _, t := range targets {
+				if err := git.DeleteBranch(t); err != nil {
+					fmt.Println(styleError.Render(fmt.Sprintf("Failed to delete '%s': %v", t, err)))
+				} else {
+					fmt.Println(styleSuccess.Render(fmt.Sprintf("Deleted branch '%s'", t)))
+				}
 			}
 		}
 	}
@@ -502,7 +523,7 @@ func (m interactiveAddModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			// Selection Mode
 			switch msg.String() {
-			case "q", "ctrl+c":
+			case "q", "esc", "ctrl+c":
 				m.abort = true
 				m.quitting = true
 				return m, tea.Quit
@@ -574,7 +595,7 @@ func (m interactiveAddModel) View() string {
 		s.WriteString(line + "\n")
 	}
 
-	s.WriteString("\n" + styleSubtle.Render(" [Space] Toggle  [v] View Diff  [c] Confirm/Stage  [q] Quit"))
+	s.WriteString("\n" + styleSubtle.Render(" [Space] Toggle  [v] View Diff  [c] Confirm/Stage  [esc/q] Back"))
 	return s.String()
 }
 
@@ -864,88 +885,96 @@ func handleLog() {
 	commitMap := make(map[string]git.CommitInfo)
 
 	for _, c := range commits {
-		// Display format: Hash - Message (Time by Author)
 		msg := c.Message
 		if len(msg) > 50 {
 			msg = msg[:47] + "..."
 		}
-		// Using a simplified label string to avoid complex rendering inside the Option text which might break alignment
 		label := fmt.Sprintf("%s - %s (%s)", c.Hash, msg, c.Time)
 		options = append(options, huh.NewOption(label, c.Hash))
 		commitMap[c.Hash] = c
 	}
 
-	var selectedHash string
-	form := huh.NewForm(
-		huh.NewGroup(
-			huh.NewSelect[string]().
-				Title(fmt.Sprintf("History (Last %d)", limit)).
-				Description("Select to view/restore").
-				Options(options...).
-				Value(&selectedHash).
-				Height(10),
-		),
-	)
-
-	if err := form.Run(); err != nil {
-		return
-	}
-
-	if selectedHash == "" {
-		return
-	}
-
-	c := commitMap[selectedHash]
-
-	// Show Details
-	fmt.Println(lipgloss.NewStyle().MarginTop(1).Border(lipgloss.RoundedBorder()).Padding(0, 1).Render(
-		lipgloss.JoinVertical(lipgloss.Left,
-			lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("212")).Render("Commit Details"),
-			fmt.Sprintf("Hash:   %s", c.Hash),
-			fmt.Sprintf("Author: %s", c.Author),
-			fmt.Sprintf("Date:   %s", c.Time),
-			"",
-			c.Message,
-		),
-	))
-
-	var action string
-	actionForm := huh.NewForm(
-		huh.NewGroup(
-			huh.NewSelect[string]().
-				Title("Action").
-				Options(
-					huh.NewOption("Restore this version", "restore"),
-					huh.NewOption("Back / Cancel", "cancel"),
-				).
-				Value(&action),
-		),
-	)
-
-	if err := actionForm.Run(); err != nil || action == "cancel" {
-		return
-	}
-
-	if action == "restore" {
-		var confirm bool
-		confirmForm := huh.NewForm(
+	for {
+		var selectedHash string
+		form := huh.NewForm(
 			huh.NewGroup(
-				huh.NewConfirm().
-					Title("Restore project to this version?").
-					Description("You will enter 'detached HEAD' state.").
-					Value(&confirm),
+				huh.NewSelect[string]().
+					Title(fmt.Sprintf("History (Last %d)", limit)).
+					Description("Select to view/restore").
+					Options(options...).
+					Value(&selectedHash).
+					Height(10),
 			),
-		)
+		).WithShowHelp(true)
 
-		if err := confirmForm.Run(); err != nil || !confirm {
-			fmt.Println(styleSubtle.Render("Cancelled."))
+		if err := form.Run(); err != nil {
 			return
 		}
 
-		if err := git.CheckoutCommit(selectedHash); err != nil {
-			fmt.Println(styleError.Render(fmt.Sprintf("Restore failed: %v", err)))
-		} else {
-			fmt.Println(styleSuccess.Render(fmt.Sprintf("Restored to %s", selectedHash)))
+		if selectedHash == "" {
+			return
+		}
+
+		c := commitMap[selectedHash]
+
+		// Show Details
+		fmt.Println(lipgloss.NewStyle().MarginTop(1).Border(lipgloss.RoundedBorder()).Padding(0, 1).Render(
+			lipgloss.JoinVertical(lipgloss.Left,
+				lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("212")).Render("Commit Details"),
+				fmt.Sprintf("Hash:   %s", c.Hash),
+				fmt.Sprintf("Author: %s", c.Author),
+				fmt.Sprintf("Date:   %s", c.Time),
+				"",
+				c.Message,
+			),
+		))
+
+		var action string
+		actionForm := huh.NewForm(
+			huh.NewGroup(
+				huh.NewSelect[string]().
+					Title("Action").
+					Options(
+						huh.NewOption("Restore this version", "restore"),
+					).
+					Value(&action),
+			),
+		).WithShowHelp(true)
+
+		if err := actionForm.Run(); err != nil {
+			if errors.Is(err, huh.ErrUserAborted) {
+				continue
+			}
+			return
+		}
+
+		if action == "restore" {
+			var confirm bool
+			confirmForm := huh.NewForm(
+				huh.NewGroup(
+					huh.NewConfirm().
+						Title("Restore project to this version?").
+						Description("You will enter 'detached HEAD' state.").
+						Value(&confirm),
+				),
+			).WithShowHelp(true)
+
+			if err := confirmForm.Run(); err != nil {
+				if errors.Is(err, huh.ErrUserAborted) {
+					continue
+				}
+				return
+			}
+			if !confirm {
+				fmt.Println(styleSubtle.Render("Cancelled."))
+				continue
+			}
+
+			if err := git.CheckoutCommit(selectedHash); err != nil {
+				fmt.Println(styleError.Render(fmt.Sprintf("Restore failed: %v", err)))
+			} else {
+				fmt.Println(styleSuccess.Render(fmt.Sprintf("Restored to %s", selectedHash)))
+			}
 		}
 	}
 }
@@ -1062,72 +1091,76 @@ func handleConfig() {
 		return
 	}
 
-	var provider string
-	var apiKey string
-	var model string
+	for {
+		var provider string
+		var apiKey string
+		var model string
 
-	// 1. Select Provider
-	form := huh.NewForm(
-		huh.NewGroup(
-			huh.NewSelect[string]().
-				Title("Default Provider").
-				Options(
-					huh.NewOption("OpenAI", "openai"),
-					huh.NewOption("Gemini", "gemini"),
-					huh.NewOption("Anthropic", "anthropic"),
-					huh.NewOption("Ollama", "ollama"),
-				).
-				Value(&provider),
-		),
-	)
+		// 1. Select Provider
+		form := huh.NewForm(
+			huh.NewGroup(
+				huh.NewSelect[string]().
+					Title("Default Provider").
+					Options(
+						huh.NewOption("OpenAI", "openai"),
+						huh.NewOption("Gemini", "gemini"),
+						huh.NewOption("Anthropic", "anthropic"),
+						huh.NewOption("Ollama", "ollama"),
+					).
+					Value(&provider),
+			),
+		).WithShowHelp(true)
 
-	if err := form.Run(); err != nil {
-		return
-	}
+		if err := form.Run(); err != nil {
+			return
+		}
 
-	// Load existing values
-	pCfg := cfg.Providers[provider]
-	apiKey = pCfg.APIKey
-	model = pCfg.DefaultModel
+		// Load existing values
+		pCfg := cfg.Providers[provider]
+		apiKey = pCfg.APIKey
+		model = pCfg.DefaultModel
 
-	// 2. Configure Details
-	// Use different fields depending on provider
-	inputs := []huh.Field{
-		huh.NewInput().
-			Title("Default Model").
-			Value(&model),
-	}
-
-	if provider != "ollama" {
-		inputs = append([]huh.Field{
+		// 2. Configure Details
+		inputs := []huh.Field{
 			huh.NewInput().
-				Title("API Key").
-				Value(&apiKey).
-				Password(true),
-		}, inputs...)
-	}
+				Title("Default Model").
+				Value(&model),
+		}
 
-	formDetails := huh.NewForm(
-		huh.NewGroup(inputs...),
-	)
+		if provider != "ollama" {
+			inputs = append([]huh.Field{
+				huh.NewInput().
+					Title("API Key").
+					Value(&apiKey).
+					Password(true),
+			}, inputs...)
+		}
 
-	if err := formDetails.Run(); err != nil {
-		return
-	}
+		formDetails := huh.NewForm(
+			huh.NewGroup(inputs...),
+		).WithShowHelp(true)
 
-	// Save
-	cfg.DefaultProvider = provider
-	pCfg.APIKey = apiKey
-	pCfg.DefaultModel = model
-	if cfg.Providers == nil {
-		cfg.Providers = make(map[string]config.ProviderConfig)
-	}
-	cfg.Providers[provider] = pCfg
+		if err := formDetails.Run(); err != nil {
+			if errors.Is(err, huh.ErrUserAborted) {
+				continue
+			}
+			return
+		}
 
-	if err := cfg.Save(); err != nil {
-		fmt.Println(styleError.Render(fmt.Sprintf("Error saving: %v", err)))
-	} else {
-		fmt.Println(styleSuccess.Render("Configuration saved successfully."))
+		// Save
+		cfg.DefaultProvider = provider
+		pCfg.APIKey = apiKey
+		pCfg.DefaultModel = model
+		if cfg.Providers == nil {
+			cfg.Providers = make(map[string]config.ProviderConfig)
+		}
+		cfg.Providers[provider] = pCfg
+
+		if err := cfg.Save(); err != nil {
+			fmt.Println(styleError.Render(fmt.Sprintf("Error saving: %v", err)))
+		} else {
+			fmt.Println(styleSuccess.Render("Configuration saved successfully."))
+		}
 	}
 }
 
