@@ -64,6 +64,10 @@ func main() {
 		handleResolve()
 	case "release":
 		handleRelease()
+	case "refactor":
+		handleRefactor(os.Args[2:])
+	case "fix":
+		handleFix(os.Args[2:])
 	case "init":
 		handleInit()
 	case "config":
@@ -101,6 +105,8 @@ func printUsage() {
 	fmt.Println("  pr      Create and manage Pull Requests")
 	fmt.Println("  resolve Auto-resolve git merge conflicts using AI")
 	fmt.Println("  release Generate AI semantic release changelogs")
+	fmt.Println("  refactor Auto-refactor or rewrite code using AI agents")
+	fmt.Println("  fix     Diagnose and auto-fix piped shell errors")
 	fmt.Println("  index   Index the repository for AI chat")
 	fmt.Println("  chat    Chat with your repository codebase")
 	fmt.Println("  config  Manage configuration (run without args for interactive mode)")

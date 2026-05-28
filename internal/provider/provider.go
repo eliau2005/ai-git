@@ -21,6 +21,10 @@ type ConflictResolver interface {
 	ResolveConflict(fileContent string) (string, error)
 }
 
+type CodeRefactorer interface {
+	RefactorCode(prompt string, fileContent string) (string, error)
+}
+
 type ProviderFactory struct {
 }
 
