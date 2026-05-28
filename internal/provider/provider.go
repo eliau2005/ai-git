@@ -17,6 +17,10 @@ type Embedder interface {
 	GenerateEmbedding(text string) ([]float32, error)
 }
 
+type ConflictResolver interface {
+	ResolveConflict(fileContent string) (string, error)
+}
+
 type ProviderFactory struct {
 }
 
