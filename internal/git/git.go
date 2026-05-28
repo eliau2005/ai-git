@@ -374,3 +374,14 @@ func GetLastCommitMessage() (string, error) {
 	}
 	return strings.TrimSpace(out.String()), nil
 }
+
+func DiffBranches(base string, head string) (string, error) {
+	cmd := exec.Command("git", "diff", base+"..."+head)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	err := cmd.Run()
+	if err != nil {
+		return "", err
+	}
+	return out.String(), nil
+}

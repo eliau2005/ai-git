@@ -10,9 +10,15 @@ import (
 type Config struct {
 	DefaultProvider      string                    `yaml:"default_provider"`
 	Providers            map[string]ProviderConfig `yaml:"providers"`
+	Platforms            map[string]PlatformConfig `yaml:"platforms,omitempty"`
 	Output               OutputConfig              `yaml:"output"`
 	SystemPrompt         string                    `yaml:"system_prompt,omitempty"`
 	CommitPromptTemplate string                    `yaml:"commit_prompt_template,omitempty"`
+}
+
+type PlatformConfig struct {
+	Token string `yaml:"token"`
+	Host  string `yaml:"host,omitempty"`
 }
 
 type ProviderConfig struct {
@@ -49,6 +55,7 @@ func LoadConfig() (*Config, error) {
 		if os.IsNotExist(err) {
 			return &Config{
 				Providers:            make(map[string]ProviderConfig),
+				Platforms:            make(map[string]PlatformConfig),
 				SystemPrompt:         defaultSystemPrompt,
 				CommitPromptTemplate: defaultCommitPrompt,
 			}, nil
@@ -59,6 +66,10 @@ func LoadConfig() (*Config, error) {
 	var cfg Config
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, err
+	}
+	
+	if cfg.Platforms == nil {
+		cfg.Platforms = make(map[string]PlatformConfig)
 	}
 
 	if cfg.SystemPrompt == "" {

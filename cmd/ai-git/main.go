@@ -1,1 +1,1276 @@
--NoNewline
+package main
+
+import (
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/charmbracelet/bubbles/viewport"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/huh"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/eliau2005/ai-git/internal/config"
+	"github.com/eliau2005/ai-git/internal/git"
+	"github.com/eliau2005/ai-git/internal/provider"
+)
+
+// Global Styles
+var (
+	styleTitle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#7D56F4")).BorderStyle(lipgloss.RoundedBorder()).Padding(0, 1)
+	styleSuccess = lipgloss.NewStyle().Foreground(lipgloss.Color("#43BF6D"))
+	styleError   = lipgloss.NewStyle().Foreground(lipgloss.Color("#FF5F87"))
+	styleSubtle  = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+)
+
+func main() {
+	if len(os.Args) < 2 {
+		printUsage()
+		os.Exit(1)
+	}
+
+	command := os.Args[1]
+
+	switch command {
+	case "status":
+		handleStatus()
+	case "log":
+		handleLog()
+	case "branch":
+		handleBranch()
+	case "add":
+		handleAdd()
+	case "commit":
+		handleCommit()
+	case "amend":
+		handleAmend()
+	case "push":
+		handlePush()
+	case "pull":
+		handlePull()
+	case "sync":
+		handleSync()
+	case "pr":
+		handlePR()
+	case "init":
+		handleInit()
+	case "config":
+		handleConfig()
+	case "auth":
+		handleAuth()
+	case "doctor":
+		handleDoctor()
+	case "hook":
+		handleHook()
+	case "generate":
+		handleGenerate()
+	case "version":
+		fmt.Println("ai-git version 1.4.0")
+	default:
+		fmt.Printf("Unknown command: %s\n", command)
+		printUsage()
+		os.Exit(1)
+	}
+}
+
+func printUsage() {
+	fmt.Println("Usage: ai-git <command> [args]")
+	fmt.Println("Commands:")
+	fmt.Println("  init    Initialize repository as AI-Git enabled")
+	fmt.Println("  status  Show repository status")
+	fmt.Println("  log     View commit history and restore versions")
+	fmt.Println("  branch  Manage branches (list, create, delete, checkout)")
+	fmt.Println("  add     Stage changes (run without args for interactive mode)")
+	fmt.Println("  commit  Create commit with AI-generated message")
+	fmt.Println("  amend   Modify the last commit with AI assistance")
+	fmt.Println("  push    Push commits to remote")
+	fmt.Println("  pull    Fetch and merge remote changes")
+	fmt.Println("  sync    Combined status -> add -> commit -> push")
+	fmt.Println("  pr      Create and manage Pull Requests")
+	fmt.Println("  config  Manage configuration (run without args for interactive mode)")
+	fmt.Println("  auth    Authenticate with platforms (GitHub/GitLab)")
+	fmt.Println("  doctor  Validate setup")
+	fmt.Println("  version Show version info")
+}
+
+// --- Generic Spinner Helper ---
+
+type actionSpinnerModel struct {
+	spinner spinner.Model
+	action  func() error
+	err     error
+	done      bool
+	title   string
+}
+
+func newActionSpinner(title string, action func() error) actionSpinnerModel {
+	s := spinner.New()
+	s.Spinner = spinner.Dot
+	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
+	return actionSpinnerModel{spinner: s, action: action, title: title}
+}
+
+func (m actionSpinnerModel) Init() tea.Cmd {
+	return tea.Batch(m.spinner.Tick, func() tea.Msg {
+		return m.action()
+	})
+}
+
+func (m actionSpinnerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case error:
+		m.err = msg
+		m.done = true
+		return m, tea.Quit
+	case spinner.TickMsg:
+		var cmd tea.Cmd
+		m.spinner, cmd = m.spinner.Update(msg)
+		return m, cmd
+	}
+	// Check if the action returned nil (success)
+	if msg == nil {
+		m.done = true
+		return m, tea.Quit
+	}
+	return m, nil
+}
+
+func (m actionSpinnerModel) View() string {
+	if m.done {
+		return ""
+	}
+	return fmt.Sprintf(" %s %s", m.spinner.View(), m.title)
+}
+
+func runSpinner(title string, action func() error) error {
+	m := newActionSpinner(title, action)
+	p := tea.NewProgram(m)
+	finalModel, err := p.Run()
+	if err != nil {
+		return err
+	}
+	finalState := finalModel.(actionSpinnerModel)
+	return finalState.err
+}
+
+// --- Commands ---
+
+func handleBranch() {
+	fmt.Println(styleTitle.Render("Branch Management"))
+
+	branches, current, err := git.GetBranches()
+	if err != nil {
+		fmt.Println(styleError.Render(fmt.Sprintf("Error fetching branches: %v", err)))
+		return
+	}
+
+	fmt.Println(styleSubtle.Render(fmt.Sprintf("Current branch: %s", styleSuccess.Render(current))))
+
+	var action string
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewSelect[string]().
+				Title("Choose an action:").
+				Options(
+					huh.NewOption("Checkout Branch", "checkout"),
+					huh.NewOption("Create New Branch", "create"),
+					huh.NewOption("Delete Branch", "delete"),
+				).
+				Value(&action),
+		),
+	)
+
+	if err := form.Run(); err != nil {
+		return
+	}
+
+	switch action {
+	case "checkout":
+		var target string
+		// Create options from branches
+		var opts []huh.Option[string]
+		for _, b := range branches {
+			title := b
+			if b == current {
+				title = fmt.Sprintf("%s (current)", b)
+			}
+			opts = append(opts, huh.NewOption(title, b))
+		}
+
+		checkoutForm := huh.NewForm(
+			huh.NewGroup(
+				huh.NewSelect[string]().
+					Title("Select branch to checkout:").
+					Options(opts...).
+					Value(&target),
+			),
+		)
+
+		if err := checkoutForm.Run(); err != nil {
+			return
+		}
+
+		if target == current {
+			fmt.Println(styleSubtle.Render("Already on this branch."))
+			return
+		}
+
+		if err := git.Checkout(target); err != nil {
+			fmt.Println(styleError.Render(fmt.Sprintf("Checkout failed: %v", err)))
+		} else {
+			fmt.Println(styleSuccess.Render(fmt.Sprintf("Switched to branch '%s'", target)))
+		}
+
+	case "create":
+		var name string
+		createForm := huh.NewForm(
+			huh.NewGroup(
+				huh.NewInput().
+					Title("Enter new branch name:").
+					Value(&name),
+			),
+		)
+
+		if err := createForm.Run(); err != nil {
+			return
+		}
+
+		if name == "" {
+			fmt.Println(styleError.Render("Branch name cannot be empty."))
+			return
+		}
+
+		if err := git.CreateBranch(name); err != nil {
+			fmt.Println(styleError.Render(fmt.Sprintf("Failed to create branch: %v", err)))
+		} else {
+			fmt.Println(styleSuccess.Render(fmt.Sprintf("Created and switched to new branch '%s'", name)))
+		}
+
+	case "delete":
+		var targets []string
+		// Filter out current branch to prevent deleting it while active (basic safety)
+		var opts []huh.Option[string]
+		for _, b := range branches {
+			if b != current {
+				opts = append(opts, huh.NewOption(b, b))
+			}
+		}
+
+		if len(opts) == 0 {
+			fmt.Println(styleSubtle.Render("No other branches to delete."))
+			return
+		}
+
+		deleteForm := huh.NewForm(
+			huh.NewGroup(
+				huh.NewMultiSelect[string]().
+					Title("Select branches to DELETE:").
+					Options(opts...).
+					Value(&targets),
+			),
+		)
+
+		if err := deleteForm.Run(); err != nil {
+			return
+		}
+
+		if len(targets) == 0 {
+			return
+		}
+
+		var confirm bool
+		confirmForm := huh.NewForm(
+			huh.NewGroup(
+				huh.NewConfirm().
+					Title(fmt.Sprintf("Are you sure you want to delete %d branch(es)?", len(targets))).
+					Description("This action cannot be undone.").
+					Value(&confirm),
+			),
+		)
+		if err := confirmForm.Run(); err != nil || !confirm {
+			fmt.Println(styleSubtle.Render("Deletion cancelled."))
+			return
+		}
+
+		for _, t := range targets {
+			if err := git.DeleteBranch(t); err != nil {
+				fmt.Println(styleError.Render(fmt.Sprintf("Failed to delete '%s': %v", t, err)))
+			} else {
+				fmt.Println(styleSuccess.Render(fmt.Sprintf("Deleted branch '%s'", t)))
+			}
+		}
+	}
+}
+
+func handleStatus() {
+	out, err := git.Status()
+	if err != nil {
+		fmt.Println(styleError.Render(fmt.Sprintf("Error: %v", err)))
+		return
+	}
+	fmt.Print(out)
+}
+
+func handleAdd() {
+	// If args provided, use standard git add
+	if len(os.Args) >= 3 {
+		err := git.Add(os.Args[2])
+		if err != nil {
+			fmt.Println(styleError.Render(fmt.Sprintf("Error: %v", err)))
+			return
+		}
+		fmt.Println(styleSuccess.Render(fmt.Sprintf("Added %s", os.Args[2])))
+		return
+	}
+
+	// Interactive Mode with Diff
+	statusShort, err := git.StatusShort()
+	if err != nil {
+		fmt.Println(styleError.Render(fmt.Sprintf("Error getting status: %v", err)))
+		return
+	}
+
+	files := parseGitStatusFiles(statusShort)
+	if len(files) == 0 {
+		fmt.Println(styleSuccess.Render("No changed files to stage."))
+		return
+	}
+
+	m := initialInteractiveAddModel(files)
+	p := tea.NewProgram(m, tea.WithAltScreen())
+	finalModel, err := p.Run()
+	if err != nil {
+		fmt.Println(styleError.Render(fmt.Sprintf("Error: %v", err)))
+		return
+	}
+
+	// Check results
+	fm := finalModel.(interactiveAddModel)
+	if fm.abort {
+		fmt.Println("Aborted.")
+		return
+	}
+
+	if len(fm.selected) == 0 {
+		fmt.Println("No files selected.")
+		return
+	}
+
+	err = runSpinner("Staging files...", func() error {
+		for i := range fm.selected {
+			if err := git.Add(fm.files[i]); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+
+	if err != nil {
+		fmt.Println(styleError.Render(fmt.Sprintf("Error staging files: %v", err)))
+	} else {
+		fmt.Println(styleSuccess.Render("Files staged successfully."))
+	}
+}
+
+// --- Interactive Add Model ---
+
+type interactiveAddModel struct {
+	files       []string
+	selected    map[int]bool
+	cursor      int
+	viewingDiff bool
+	diffContent string
+	viewport    viewport.Model
+	width       int
+	height      int
+	abort       bool
+	quitting    bool
+}
+
+func initialInteractiveAddModel(files []string) interactiveAddModel {
+	return interactiveAddModel{
+		files:    files,
+		selected: make(map[int]bool),
+		cursor:   0,
+	}
+}
+
+func (m interactiveAddModel) Init() tea.Cmd {
+	return nil
+}
+
+func (m interactiveAddModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		m.viewport.Width = msg.Width
+		m.viewport.Height = msg.Height - 4 // Header + Footer
+		return m, nil
+
+	case tea.KeyMsg:
+		if m.viewingDiff {
+			// Diff View Mode
+			switch msg.String() {
+			case "q", "esc", "v", "enter":
+				m.viewingDiff = false
+				return m, nil
+			default:
+				m.viewport, cmd = m.viewport.Update(msg)
+				return m, cmd
+			}
+		} else {
+			// Selection Mode
+			switch msg.String() {
+			case "q", "ctrl+c":
+				m.abort = true
+				m.quitting = true
+				return m, tea.Quit
+			case "up", "k":
+				if m.cursor > 0 {
+					m.cursor--
+				}
+			case "down", "j":
+				if m.cursor < len(m.files)-1 {
+					m.cursor++
+				}
+			case " ":
+				if m.selected[m.cursor] {
+					delete(m.selected, m.cursor)
+				} else {
+					m.selected[m.cursor] = true
+				}
+			case "v", "enter":
+				// Load diff
+				content, err := git.Diff(m.files[m.cursor])
+				if err != nil {
+					m.diffContent = fmt.Sprintf("Error loading diff: %v", err)
+				} else {
+					m.diffContent = content
+				}
+				m.viewport = viewport.New(m.width, m.height-4)
+				m.viewport.SetContent(m.diffContent)
+				m.viewingDiff = true
+			case "c": // Commit/Confirm selection
+				m.quitting = true
+				return m, tea.Quit
+			}
+		}
+	}
+	return m, nil
+}
+
+func (m interactiveAddModel) View() string {
+	if m.quitting {
+		return ""
+	}
+
+	if m.viewingDiff {
+		header := styleTitle.Render(fmt.Sprintf("Diff: %s", m.files[m.cursor]))
+		footer := styleSubtle.Render(" [q/esc] Back ")
+		return fmt.Sprintf("%s\n%s\n%s", header, m.viewport.View(), footer)
+	}
+
+	var s strings.Builder
+	s.WriteString(styleTitle.Render("Select Files to Stage") + "\n\n")
+
+	for i, file := range m.files {
+		cursor := "  "
+		if m.cursor == i {
+			cursor = styleTitle.Foreground(lipgloss.Color("205")).Render("> ")
+		}
+
+		checked := "[ ]"
+		if m.selected[i] {
+			checked = styleSuccess.Render("[x]")
+		}
+
+		// Highlight current line
+		line := fmt.Sprintf("%s%s %s", cursor, checked, file)
+		if m.cursor == i {
+			line = lipgloss.NewStyle().Bold(true).Render(line)
+		}
+
+		s.WriteString(line + "\n")
+	}
+
+	s.WriteString("\n" + styleSubtle.Render(" [Space] Toggle  [v] View Diff  [c] Confirm/Stage  [q] Quit"))
+	return s.String()
+}
+
+// --- Spinner for AI (Specific) ---
+
+
+type aiSpinnerModel struct {
+	spinner    spinner.Model
+	diff       string
+	context    string
+	provider   provider.Provider
+	msgResult  string
+	err        error
+	done       bool
+	tokenCount int
+}
+
+func initialAISpinner(p provider.Provider, diff string, context string) aiSpinnerModel {
+	s := spinner.New()
+	s.Spinner = spinner.Dot
+	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
+	tokens := estimateTokens(diff + context)
+	return aiSpinnerModel{spinner: s, diff: diff, context: context, provider: p, tokenCount: tokens}
+}
+
+func (m aiSpinnerModel) Init() tea.Cmd {
+	return tea.Batch(m.spinner.Tick, func() tea.Msg {
+		msg, err := m.provider.GenerateCommitMessage(m.diff, m.context)
+		return msgGeneratedMsg{msg: msg, err: err}
+	})
+}
+
+type msgGeneratedMsg struct {
+	msg string
+	err error
+}
+
+func (m aiSpinnerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		if msg.Type == tea.KeyCtrlC {
+			return m, tea.Quit
+		}
+	case spinner.TickMsg:
+		var cmd tea.Cmd
+		m.spinner, cmd = m.spinner.Update(msg)
+		return m, cmd
+	case msgGeneratedMsg:
+		m.msgResult = msg.msg
+		m.err = msg.err
+		m.done = true
+		return m, tea.Quit
+	}
+	return m, nil
+}
+
+func (m aiSpinnerModel) View() string {
+	if m.done {
+		return ""
+	}
+	tokenStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	if m.tokenCount > 15000 {
+		tokenStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#FF5F87")).Bold(true)
+	}
+	tokenBadge := tokenStyle.Render(fmt.Sprintf(" (~%d tokens)", m.tokenCount))
+	
+	return fmt.Sprintf("\n %s AI is thinking...%s\n\n", m.spinner.View(), tokenBadge)
+}
+
+func runAIWorkflow(diff string, contextStr string) (string, bool) {
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		fmt.Println(styleError.Render(fmt.Sprintf("Config Error: %v", err)))
+		return "", false
+	}
+
+	root, _ := git.GetRepoRoot()
+	repoCfg, _ := config.LoadRepoConfig(root)
+
+	selectedProvider := cfg.DefaultProvider
+	if repoCfg != nil && repoCfg.EnabledProvider != "" {
+		selectedProvider = repoCfg.EnabledProvider
+	}
+	if selectedProvider == "" {
+		fmt.Println(styleError.Render("No AI provider configured."))
+		return "", false
+	}
+
+	pCfg, ok := cfg.Providers[selectedProvider]
+	if !ok {
+		fmt.Println(styleError.Render("Provider not configured."))
+		return "", false
+	}
+
+	model := pCfg.DefaultModel
+	if repoCfg != nil && repoCfg.ModelOverride != "" {
+		model = repoCfg.ModelOverride
+	}
+
+	factory := &provider.ProviderFactory{}
+	p := factory.GetProvider(selectedProvider, pCfg, model, cfg.SystemPrompt, cfg.CommitPromptTemplate)
+	if p == nil {
+		fmt.Println(styleError.Render("Failed to init provider."))
+		return "", false
+	}
+
+	m := initialAISpinner(p, diff, contextStr)
+	pProgram := tea.NewProgram(m)
+	finalModel, err := pProgram.Run()
+	if err != nil {
+		fmt.Println(styleError.Render(fmt.Sprintf("Error: %v", err)))
+		return "", false
+	}
+	finalState := finalModel.(aiSpinnerModel)
+	if finalState.err != nil {
+		fmt.Println(styleError.Render(fmt.Sprintf("AI Error: %v", finalState.err)))
+		return "", false
+	}
+
+	generatedMsg := finalState.msgResult
+
+	// Review Loop
+	parts := strings.SplitN(generatedMsg, "\n", 2)
+	title := strings.TrimSpace(parts[0])
+	description := ""
+	if len(parts) > 1 {
+		description = strings.TrimSpace(parts[1])
+	}
+
+	for {
+		width := 70
+		labelStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("212")).MarginBottom(0)
+		contentStyle := lipgloss.NewStyle().PaddingLeft(2).Width(width).MaxWidth(width)
+		
+		boxStyle := lipgloss.NewStyle().
+			MarginTop(1).
+			Border(lipgloss.RoundedBorder()).
+			Padding(0, 1).
+			Width(width + 4) 
+
+		fmt.Println(boxStyle.Render(
+			lipgloss.JoinVertical(lipgloss.Left,
+				labelStyle.Render("Title:"),
+				contentStyle.Render(title),
+				"", 
+				labelStyle.Render("Description:"),
+				contentStyle.Render(description),
+			),
+		))
+
+		var action string
+		form := huh.NewForm(
+			huh.NewGroup(
+				huh.NewSelect[string]().
+					Title("Action").
+					Options(
+						huh.NewOption("Confirm", "commit").Selected(true),
+						huh.NewOption("Edit", "edit"),
+						huh.NewOption("Edit in Editor", "editor"),
+						huh.NewOption("Cancel", "cancel"),
+					).
+					Value(&action),
+			),
+		)
+
+		if err := form.Run(); err != nil {
+			return "", false
+		}
+
+		if action == "cancel" {
+			return "", false
+		}
+		if action == "commit" {
+			break
+		}
+		if action == "edit" {
+			f := huh.NewForm(
+				huh.NewGroup(
+					huh.NewInput().Title("Title").Value(&title),
+					huh.NewInput().Title("Description").Value(&description),
+				),
+			)
+			f.Run()
+		}
+		if action == "editor" {
+			currentFull := fmt.Sprintf("%s\n\n%s", title, description)
+			newContent, err := openInEditor(currentFull)
+			if err != nil {
+				fmt.Println(styleError.Render(fmt.Sprintf("Editor error: %v", err)))
+			} else {
+				parts := strings.SplitN(newContent, "\n", 2)
+				title = strings.TrimSpace(parts[0])
+				description = ""
+				if len(parts) > 1 {
+					description = strings.TrimSpace(parts[1])
+				}
+			}
+		}
+	}
+
+	return fmt.Sprintf("%s\n\n%s", title, description), true
+}
+
+func handleCommit() {
+	fmt.Println(styleTitle.Render("AI Commit"))
+
+	root, _ := git.GetRepoRoot()
+
+	// Smart Staging Check
+	diff, err := git.DiffStagedFiltered(root)
+	if err != nil {
+		fmt.Println(styleError.Render(fmt.Sprintf("Error checking staged changes: %v", err)))
+		return
+	}
+
+	if diff == "" {
+		statusShort, err := git.StatusShort()
+		if err != nil {
+			fmt.Println(styleError.Render(fmt.Sprintf("Error getting status: %v", err)))
+			return
+		}
+		files := parseGitStatusFiles(statusShort)
+		if len(files) == 0 {
+			fmt.Println(styleError.Render("No changes to commit."))
+			return
+		}
+		
+		var selectedFiles []string
+		var options []huh.Option[string]
+		for _, f := range files {
+			options = append(options, huh.NewOption(f, f))
+		}
+
+		form := huh.NewForm(
+			huh.NewGroup(
+				huh.NewMultiSelect[string]().
+					Title("No staged changes detected. Select files to stage:").
+					Options(options...).
+					Value(&selectedFiles),
+			),
+		)
+
+		if err := form.Run(); err != nil {
+			return
+		}
+		if len(selectedFiles) == 0 {
+			fmt.Println(styleError.Render("Aborted."))
+			return
+		}
+
+		for _, f := range selectedFiles {
+			git.Add(f)
+		}
+		
+		diff, _ = git.DiffStagedFiltered(root)
+	}
+
+	// Gather Context
+	branchName, _ := git.GetCurrentBranch()
+	recentCommits, _ := git.GetRecentCommitMessages(5)
+	
+	var contextBuilder strings.Builder
+	if branchName != "" {
+		contextBuilder.WriteString(fmt.Sprintf("Current Branch: %s\n", branchName))
+	}
+	if len(recentCommits) > 0 {
+		contextBuilder.WriteString("Recent Commit History:\n")
+		for _, msg := range recentCommits {
+			contextBuilder.WriteString(fmt.Sprintf("- %s\n", msg))
+		}
+	}
+	contextStr := contextBuilder.String()
+
+	finalMsg, ok := runAIWorkflow(diff, contextStr)
+	if !ok {
+		fmt.Println(styleSubtle.Render("Cancelled."))
+		return
+	}
+
+	if err := git.Commit(finalMsg); err != nil {
+		fmt.Println(styleError.Render(fmt.Sprintf("Commit failed: %v", err)))
+		return
+	}
+	fmt.Println(styleSuccess.Render("Committed successfully."))
+}
+
+func handleAmend() {
+	fmt.Println(styleTitle.Render("AI Amend Commit"))
+
+	lastMsg, err := git.GetLastCommitMessage()
+	if err != nil {
+		fmt.Println(styleError.Render(fmt.Sprintf("Error reading last commit: %v", err)))
+		return
+	}
+
+	diff, err := git.DiffStaged()
+	if err != nil {
+		fmt.Println(styleError.Render(fmt.Sprintf("Error checking staged changes: %v", err)))
+		return
+	}
+
+	extraContext := fmt.Sprintf("Previous Commit Message (to be replaced/improved):\n%s\n", lastMsg)
+
+	if diff == "" {
+		fmt.Println(styleSubtle.Render("No staged changes. Refining based on previous commit's changes."))
+		diff, err = git.DiffLastCommit()
+		if err != nil {
+			fmt.Println(styleError.Render(fmt.Sprintf("Error getting diff: %v", err)))
+			return
+		}
+	} else {
+		fmt.Println(styleSubtle.Render("Amending with new staged changes."))
+		extraContext += "\nUpdate the message to include these new changes."
+	}
+
+	branchName, _ := git.GetCurrentBranch()
+	var contextBuilder strings.Builder
+	contextBuilder.WriteString(extraContext + "\n")
+	if branchName != "" {
+		contextBuilder.WriteString(fmt.Sprintf("Current Branch: %s\n", branchName))
+	}
+	contextStr := contextBuilder.String()
+
+	finalMsg, ok := runAIWorkflow(diff, contextStr)
+	if !ok {
+		fmt.Println(styleSubtle.Render("Cancelled."))
+		return
+	}
+
+	if err := git.AmendCommit(finalMsg); err != nil {
+		fmt.Println(styleError.Render(fmt.Sprintf("Amend failed: %v", err)))
+		return
+	}
+	fmt.Println(styleSuccess.Render("Amended successfully."))
+}
+
+func handleHook() {
+	root, err := git.GetRepoRoot()
+	if err != nil {
+		fmt.Println(styleError.Render("Not a git repo."))
+		return
+	}
+	hookPath := filepath.Join(root, ".git", "hooks", "prepare-commit-msg")
+	
+	script := `#!/bin/sh
+# AI-Git Hook
+# Only run if no message source ($2) is provided (standard commit)
+if [ -z "$2" ]; then
+    exec < /dev/tty
+    ai-git generate "$1"
+fi
+`
+	err = os.WriteFile(hookPath, []byte(script), 0755)
+	if err != nil {
+		fmt.Println(styleError.Render(fmt.Sprintf("Error installing hook: %v", err)))
+		return
+	}
+	fmt.Println(styleSuccess.Render("Hook installed! 'git commit' will now trigger AI-Git."))
+}
+
+func handleGenerate() {
+	if len(os.Args) < 3 {
+		return
+	}
+	msgFile := os.Args[2]
+	
+	root, _ := git.GetRepoRoot()
+	diff, err := git.DiffStagedFiltered(root)
+	if err != nil || diff == "" {
+		return 
+	}
+	
+	branchName, _ := git.GetCurrentBranch()
+	recentCommits, _ := git.GetRecentCommitMessages(5)
+	
+	var contextBuilder strings.Builder
+	if branchName != "" {
+		contextBuilder.WriteString(fmt.Sprintf("Current Branch: %s\n", branchName))
+	}
+	if len(recentCommits) > 0 {
+		contextBuilder.WriteString("Recent Commit History:\n")
+		for _, msg := range recentCommits {
+			contextBuilder.WriteString(fmt.Sprintf("- %s\n", msg))
+		}
+	}
+	contextStr := contextBuilder.String()
+
+	finalMsg, ok := runAIWorkflow(diff, contextStr)
+	if ok {
+		os.WriteFile(msgFile, []byte(finalMsg), 0644)
+	}
+}
+
+func handleLog() {
+	fmt.Println(styleTitle.Render("Git Log"))
+
+	limit := 10
+	if len(os.Args) > 2 {
+		if l, err := strconv.Atoi(os.Args[2]); err == nil && l > 0 {
+			limit = l
+		}
+	}
+
+	commits, err := git.GetLog(limit)
+	if err != nil {
+		fmt.Println(styleError.Render(fmt.Sprintf("Error getting log: %v", err)))
+		return
+	}
+
+	if len(commits) == 0 {
+		fmt.Println(styleSubtle.Render("No commits found."))
+		return
+	}
+
+	var options []huh.Option[string]
+	commitMap := make(map[string]git.CommitInfo)
+
+	for _, c := range commits {
+		// Display format: Hash - Message (Time by Author)
+		msg := c.Message
+		if len(msg) > 50 {
+			msg = msg[:47] + "..."
+		}
+		// Using a simplified label string to avoid complex rendering inside the Option text which might break alignment
+		label := fmt.Sprintf("%s - %s (%s)", c.Hash, msg, c.Time)
+		options = append(options, huh.NewOption(label, c.Hash))
+		commitMap[c.Hash] = c
+	}
+
+	var selectedHash string
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewSelect[string]().
+				Title(fmt.Sprintf("History (Last %d)", limit)).
+				Description("Select to view/restore").
+				Options(options...).
+				Value(&selectedHash).
+				Height(10),
+		),
+	)
+
+	if err := form.Run(); err != nil {
+		return
+	}
+
+	if selectedHash == "" {
+		return
+	}
+
+	c := commitMap[selectedHash]
+
+	// Show Details
+	fmt.Println(lipgloss.NewStyle().MarginTop(1).Border(lipgloss.RoundedBorder()).Padding(0, 1).Render(
+		lipgloss.JoinVertical(lipgloss.Left,
+			lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("212")).Render("Commit Details"),
+			fmt.Sprintf("Hash:   %s", c.Hash),
+			fmt.Sprintf("Author: %s", c.Author),
+			fmt.Sprintf("Date:   %s", c.Time),
+			"",
+			c.Message,
+		),
+	))
+
+	var action string
+	actionForm := huh.NewForm(
+		huh.NewGroup(
+			huh.NewSelect[string]().
+				Title("Action").
+				Options(
+					huh.NewOption("Restore this version", "restore"),
+					huh.NewOption("Back / Cancel", "cancel"),
+				).
+				Value(&action),
+		),
+	)
+
+	if err := actionForm.Run(); err != nil || action == "cancel" {
+		return
+	}
+
+	if action == "restore" {
+		var confirm bool
+		confirmForm := huh.NewForm(
+			huh.NewGroup(
+				huh.NewConfirm().
+					Title("Restore project to this version?").
+					Description("You will enter 'detached HEAD' state.").
+					Value(&confirm),
+			),
+		)
+
+		if err := confirmForm.Run(); err != nil || !confirm {
+			fmt.Println(styleSubtle.Render("Cancelled."))
+			return
+		}
+
+		if err := git.CheckoutCommit(selectedHash); err != nil {
+			fmt.Println(styleError.Render(fmt.Sprintf("Restore failed: %v", err)))
+		} else {
+			fmt.Println(styleSuccess.Render(fmt.Sprintf("Restored to %s", selectedHash)))
+		}
+	}
+}
+
+func handlePush() {
+	fmt.Println(styleSubtle.Render("Pushing changes..."))
+	err := git.PushInteractive()
+	if err != nil {
+		fmt.Println(styleError.Render(fmt.Sprintf("Push failed: %v", err)))
+	} else {
+		fmt.Println(styleSuccess.Render("Pushed successfully."))
+	}
+}
+
+func handlePull() {
+	fmt.Println(styleSubtle.Render("Pulling changes..."))
+	err := git.PullInteractive()
+	if err != nil {
+		fmt.Println(styleError.Render(fmt.Sprintf("Pull failed: %v", err)))
+	} else {
+		fmt.Println(styleSuccess.Render("Pulled successfully."))
+	}
+}
+
+func handleSync() {
+	handleCommit()
+	var confirm bool
+	huh.NewForm(huh.NewGroup(huh.NewConfirm().Title("Push changes?").Value(&confirm))).Run()
+	if confirm {
+		handlePush()
+	}
+}
+
+func handleInit() {
+	err := runSpinner("Initializing AI-Git...", func() error {
+		time.Sleep(500 * time.Millisecond) // UX pause
+		root, err := git.GetRepoRoot()
+		if err != nil {
+			return fmt.Errorf("not a git repository")
+		}
+		repoConfigPath := filepath.Join(root, ".ai-git.yaml")
+		if _, err := os.Stat(repoConfigPath); err == nil {
+			return nil // Already exists
+		}
+		cfg, _ := config.LoadConfig()
+		defaultProvider := "openai"
+		if cfg != nil && cfg.DefaultProvider != "" {
+			defaultProvider = cfg.DefaultProvider
+		}
+		content := fmt.Sprintf("enabled_provider: %s\ncommit_style: conventional\nlanguage: english\n", defaultProvider)
+		return os.WriteFile(repoConfigPath, []byte(content), 0644)
+	})
+
+	if err != nil {
+		fmt.Println(styleError.Render(fmt.Sprintf("Init failed: %v", err)))
+	} else {
+		fmt.Println(styleSuccess.Render("Repository initialized."))
+	}
+}
+
+func handleDoctor() {
+	fmt.Println(styleTitle.Render("AI-Git Doctor"))
+
+	check := func(label string, success bool, msg string) {
+		icon := styleSuccess.Render("✓")
+		if !success {
+			icon = styleError.Render("✗")
+		}
+		fmt.Printf(" %s %s: %s\n", icon, label, msg)
+	}
+
+	// Git
+	if git.IsRepo() {
+		check("Git Repo", true, "Found")
+	} else {
+		check("Git Repo", false, "Not found")
+	}
+
+	// Config
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		check("Config", false, err.Error())
+	} else {
+		check("Config", true, "Loaded")
+		if cfg.DefaultProvider == "" {
+			check("Provider", false, "No default set")
+		} else {
+			check("Provider", true, cfg.DefaultProvider)
+			pCfg, ok := cfg.Providers[cfg.DefaultProvider]
+			if !ok {
+				check("Setup", false, "Provider config missing")
+			} else if pCfg.APIKey == "" && cfg.DefaultProvider != "ollama" {
+				check("Auth", false, "API Key missing")
+			} else {
+				check("Auth", true, "API Key set")
+			}
+		}
+	}
+}
+
+func handleConfig() {
+	// If CLI args present, legacy mode
+	if len(os.Args) > 2 {
+		legacyConfig()
+		return
+	}
+
+	// Interactive Mode
+	fmt.Println(styleTitle.Render("Configuration"))
+
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		fmt.Println(styleError.Render("Failed to load config."))
+		return
+	}
+
+	var provider string
+	var apiKey string
+	var model string
+
+	// 1. Select Provider
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewSelect[string]().
+				Title("Default Provider").
+				Options(
+					huh.NewOption("OpenAI", "openai"),
+					huh.NewOption("Gemini", "gemini"),
+					huh.NewOption("Anthropic", "anthropic"),
+					huh.NewOption("Ollama", "ollama"),
+				).
+				Value(&provider),
+		),
+	)
+
+	if err := form.Run(); err != nil {
+		return
+	}
+
+	// Load existing values
+	pCfg := cfg.Providers[provider]
+	apiKey = pCfg.APIKey
+	model = pCfg.DefaultModel
+
+	// 2. Configure Details
+	// Use different fields depending on provider
+	inputs := []huh.Field{
+		huh.NewInput().
+			Title("Default Model").
+			Value(&model),
+	}
+
+	if provider != "ollama" {
+		inputs = append([]huh.Field{
+			huh.NewInput().
+				Title("API Key").
+				Value(&apiKey).
+				Password(true),
+		}, inputs...)
+	}
+
+	formDetails := huh.NewForm(
+		huh.NewGroup(inputs...),
+	)
+
+	if err := formDetails.Run(); err != nil {
+		return
+	}
+
+	// Save
+	cfg.DefaultProvider = provider
+	pCfg.APIKey = apiKey
+	pCfg.DefaultModel = model
+	if cfg.Providers == nil {
+		cfg.Providers = make(map[string]config.ProviderConfig)
+	}
+	cfg.Providers[provider] = pCfg
+
+	if err := cfg.Save(); err != nil {
+		fmt.Println(styleError.Render(fmt.Sprintf("Error saving: %v", err)))
+	} else {
+		fmt.Println(styleSuccess.Render("Configuration saved successfully."))
+	}
+}
+
+func legacyConfig() {
+	cfg, _ := config.LoadConfig()
+	subCommand := os.Args[2]
+	switch subCommand {
+	case "set-provider":
+		if len(os.Args) < 4 {
+			return
+		}
+		cfg.DefaultProvider = os.Args[3]
+	case "set-key":
+		if len(os.Args) < 5 {
+			return
+		}
+		pName := os.Args[3]
+		pCfg := cfg.Providers[pName]
+		pCfg.APIKey = os.Args[4]
+		cfg.Providers[pName] = pCfg
+	case "set-model":
+		if len(os.Args) < 5 {
+			return
+		}
+		pName := os.Args[3]
+		pCfg := cfg.Providers[pName]
+		pCfg.DefaultModel = os.Args[4]
+		cfg.Providers[pName] = pCfg
+	}
+	cfg.Save()
+}
+
+func parseGitStatusFiles(status string) []string {
+	var files []string
+	lines := strings.Split(status, "\n")
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if len(trimmed) > 3 {
+			filePart := strings.TrimSpace(line[2:])
+			files = append(files, filePart)
+		}
+	}
+	return files
+}
+
+func estimateTokens(text string) int {
+	return len(text) / 4
+}
+
+func openInEditor(initialContent string) (string, error) {
+	editor := os.Getenv("EDITOR")
+	if editor == "" {
+		editor = "vim" // Default fallback
+		if _, err := exec.LookPath("nano"); err == nil {
+			editor = "nano"
+		}
+		if _, err := exec.LookPath("notepad"); err == nil {
+			editor = "notepad"
+		}
+	}
+
+	tmpFile, err := os.CreateTemp("", "AI_GIT_COMMIT_EDITMSG")
+	if err != nil {
+		return "", err
+	}
+	defer os.Remove(tmpFile.Name())
+
+	if _, err := tmpFile.WriteString(initialContent); err != nil {
+		return "", err
+	}
+	tmpFile.Close()
+
+	cmd := exec.Command(editor, tmpFile.Name())
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("failed to open editor: %w", err)
+	}
+
+	content, err := os.ReadFile(tmpFile.Name())
+	if err != nil {
+		return "", err
+	}
+
+	return string(content), nil
+}
