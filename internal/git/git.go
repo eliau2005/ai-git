@@ -65,6 +65,67 @@ func DiffStaged() (string, error) {
 	return out.String(), nil
 }
 
+func GetStagedFiles() ([]string, error) {
+	cmd := exec.Command("git", "diff", "--name-only", "--staged")
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	err := cmd.Run()
+	if err != nil {
+		return nil, err
+	}
+	var files []string
+	lines := strings.Split(out.String(), "\n")
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed != "" {
+			files = append(files, trimmed)
+		}
+	}
+	return files, nil
+}
+
+func DiffFiles(files []string) (string, error) {
+	if len(files) == 0 {
+		return "", nil
+	}
+	args := []string{"diff", "--staged"}
+	args = append(args, "--")
+	args = append(args, files...)
+	cmd := exec.Command("git", args...)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	err := cmd.Run()
+	if err != nil {
+		return "", err
+	}
+	return out.String(), nil
+}
+
+func DiffStagedFiltered(root string) (string, error) {
+	files, err := GetStagedFiles()
+	if err != nil {
+		return "", err
+	}
+	
+	rules, _ := LoadIgnoreRules(root)
+	
+	var keep []string
+	for _, f := range files {
+		if !ShouldIgnore(f, rules) {
+			keep = append(keep, f)
+		}
+	}
+	
+	// If everything is ignored, but we have changes, we might want to warn?
+	// Or just return empty diff? If we return empty diff, AI will fail.
+	// Fallback: if all ignored, send everything (user intention matters).
+	if len(keep) == 0 && len(files) > 0 {
+		return DiffFiles(files)
+	}
+	
+	return DiffFiles(keep)
+}
+
 func Add(path string) error {
 	cmd := exec.Command("git", "add", path)
 	return cmd.Run()
@@ -213,6 +274,17 @@ func Diff(file string) (string, error) {
 	return out.String(), nil
 }
 
+func DiffLastCommit() (string, error) {
+	cmd := exec.Command("git", "diff", "HEAD^..HEAD")
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	err := cmd.Run()
+	if err != nil {
+		return "", err
+	}
+	return out.String(), nil
+}
+
 func GetLog(limit int) ([]CommitInfo, error) {
 	// Format: Hash|Subject|Author|RelativeTime
 	cmd := exec.Command("git", "log", fmt.Sprintf("-n%d", limit), "--pretty=format:%h|%s|%an|%ar")
@@ -251,4 +323,54 @@ func CheckoutCommit(hash string) error {
 		return fmt.Errorf("%v: %s", err, stderr.String())
 	}
 	return nil
+}
+
+func GetCurrentBranch() (string, error) {
+	cmd := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	err := cmd.Run()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(out.String()), nil
+}
+
+func GetRecentCommitMessages(limit int) ([]string, error) {
+	cmd := exec.Command("git", "log", fmt.Sprintf("-n%d", limit), "--pretty=format:%s")
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	err := cmd.Run()
+	if err != nil {
+		return nil, err
+	}
+	
+	var messages []string
+	if out.String() == "" {
+		return messages, nil
+	}
+	lines := strings.Split(out.String(), "\n")
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed != "" {
+			messages = append(messages, trimmed)
+		}
+	}
+	return messages, nil
+}
+
+func AmendCommit(message string) error {
+	cmd := exec.Command("git", "commit", "--amend", "-m", message)
+	return cmd.Run()
+}
+
+func GetLastCommitMessage() (string, error) {
+	cmd := exec.Command("git", "log", "-1", "--pretty=%B")
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	err := cmd.Run()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(out.String()), nil
 }
