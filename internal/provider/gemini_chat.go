@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 )
 
 func (p *GeminiProvider) AskChat(prompt string, contextStr string) (string, error) {
@@ -47,7 +48,7 @@ func (p *GeminiProvider) AskChat(prompt string, contextStr string) (string, erro
 
 	req.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{}
+	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", err

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/eliau2005/ai-git/internal/config"
@@ -34,46 +35,56 @@ func handleIndex() {
 	store.Chunks = nil // Clear existing chunks for re-index
 
 	var count int
-	err = runSpinner("Indexing files...", func() error {
-		rules, _ := git.LoadIgnoreRules(root)
+	rules, _ := git.LoadIgnoreRules(root)
 
-		return filepath.Walk(root, func(path string, info fs.FileInfo, err error) error {
-			if err != nil || info.IsDir() {
-				// Skip .git directory
-				if info != nil && info.IsDir() && info.Name() == ".git" {
-					return filepath.SkipDir
-				}
-				return nil
-			}
+	fmt.Println(styleSubtle.Render("Scanning and embedding files... This may take a moment due to API rate limits."))
 
-			relPath, _ := filepath.Rel(root, path)
-			if git.ShouldIgnore(relPath, rules) {
-				return nil
-			}
-
-			content, err := os.ReadFile(path)
-			if err != nil {
-				return nil
-			}
-
-			// Simple chunking (by file for now, or split by 1000 chars)
-			text := string(content)
-			if len(text) > 4000 {
-				text = text[:4000] // simple truncation for PoC to avoid token limits
-			}
-
-			emb, err := p.GenerateEmbedding(text)
-			if err == nil && len(emb) > 0 {
-				store.AddChunk(rag.Chunk{
-					ID:        relPath,
-					FilePath:  relPath,
-					Content:   text,
-					Embedding: emb,
-				})
-				count++
+	err = filepath.Walk(root, func(path string, info fs.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			// Skip .git directory
+			if info != nil && info.IsDir() && info.Name() == ".git" {
+				return filepath.SkipDir
 			}
 			return nil
-		})
+		}
+
+		relPath, _ := filepath.Rel(root, path)
+		if git.ShouldIgnore(relPath, rules) {
+			return nil
+		}
+
+		ext := strings.ToLower(filepath.Ext(path))
+		if ext != ".go" && ext != ".md" && ext != ".txt" && ext != ".js" && ext != ".ts" {
+			return nil // Skip non-code/docs
+		}
+
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return nil
+		}
+
+		// Simple chunking
+		text := string(content)
+		if len(text) > 4000 {
+			text = text[:4000] // simple truncation
+		}
+
+		fmt.Printf("Indexing %s... ", relPath)
+		emb, err := p.GenerateEmbedding(text)
+		if err == nil && len(emb) > 0 {
+			store.AddChunk(rag.Chunk{
+				ID:        relPath,
+				FilePath:  relPath,
+				Content:   text,
+				Embedding: emb,
+			})
+			count++
+			fmt.Println("Done")
+			time.Sleep(2 * time.Second) // Rate limit prevention
+		} else {
+			fmt.Println("Failed:", err)
+		}
+		return nil
 	})
 
 	if err != nil {

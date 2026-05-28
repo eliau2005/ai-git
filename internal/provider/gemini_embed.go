@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 )
 
 type geminiEmbedRequest struct {
@@ -27,8 +28,8 @@ type geminiEmbedResponse struct {
 }
 
 func (p *GeminiProvider) GenerateEmbedding(text string) ([]float32, error) {
-	// Gemini uses text-embedding-004
-	model := "text-embedding-004"
+	// Gemini uses gemini-embedding-2
+	model := "gemini-embedding-2"
 	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:embedContent?key=%s", model, p.APIKey)
 
 	reqBody := geminiEmbedRequest{
@@ -52,7 +53,7 @@ func (p *GeminiProvider) GenerateEmbedding(text string) ([]float32, error) {
 
 	req.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{}
+	client := &http.Client{Timeout: 15 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
