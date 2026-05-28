@@ -1,16 +1,18 @@
 package provider
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
-func (p *GeminiProvider) AskChat(prompt string, contextStr string) (string, error) {
-	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s", p.Model, p.APIKey)
+func (p *GeminiProvider) AskChatStream(prompt string, contextStr string, onChunk func(string)) error {
+	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:streamGenerateContent?alt=sse&key=%s", p.Model, p.APIKey)
 
 	fullPrompt := prompt
 	if contextStr != "" {
@@ -38,20 +40,21 @@ func (p *GeminiProvider) AskChat(prompt string, contextStr string) (string, erro
 
 	jsonData, err := json.Marshal(reqBody)
 	if err != nil {
-		return "", err
+		return err
 	}
 
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
 	if err != nil {
-		return "", err
+		return err
 	}
 
 	req.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{Timeout: 30 * time.Second}
+	// We use a longer timeout for streaming
+	client := &http.Client{Timeout: 60 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", err
+		return err
 	}
 	defer resp.Body.Close()
 
@@ -59,19 +62,28 @@ func (p *GeminiProvider) AskChat(prompt string, contextStr string) (string, erro
 		var errResp geminiGenerateContentResponse
 		body, _ := io.ReadAll(resp.Body)
 		if json.Unmarshal(body, &errResp) == nil && errResp.Error.Message != "" {
-			return "", fmt.Errorf("Gemini API error: %s", errResp.Error.Message)
+			return fmt.Errorf("Gemini API error: %s", errResp.Error.Message)
 		}
-		return "", fmt.Errorf("Gemini API error: %s", string(body))
+		return fmt.Errorf("Gemini API error: %s", string(body))
 	}
 
-	var result geminiGenerateContentResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", err
+	scanner := bufio.NewScanner(resp.Body)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.HasPrefix(line, "data: ") {
+			data := strings.TrimPrefix(line, "data: ")
+			if data == "[DONE]" {
+				break
+			}
+			var chunkResp geminiGenerateContentResponse
+			if err := json.Unmarshal([]byte(data), &chunkResp); err == nil {
+				if len(chunkResp.Candidates) > 0 && len(chunkResp.Candidates[0].Content.Parts) > 0 {
+					text := chunkResp.Candidates[0].Content.Parts[0].Text
+					onChunk(text)
+				}
+			}
+		}
 	}
 
-	if len(result.Candidates) > 0 && len(result.Candidates[0].Content.Parts) > 0 {
-		return result.Candidates[0].Content.Parts[0].Text, nil
-	}
-
-	return "", fmt.Errorf("no response from Gemini")
+	return scanner.Err()
 }

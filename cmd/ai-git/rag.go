@@ -149,17 +149,14 @@ func handleChat() {
 			contextBuilder.WriteString(fmt.Sprintf("--- File: %s ---\n%s\n", r.Chunk.FilePath, r.Chunk.Content))
 		}
 
-		var answer string
-		err = runSpinner("AI is thinking...", func() error {
-			ans, e := chatter.AskChat(query, contextBuilder.String())
-			answer = ans
-			return e
+		fmt.Print(aiStyle.Render("\nAI: "))
+		err = chatter.AskChatStream(query, contextBuilder.String(), func(chunk string) {
+			fmt.Print(chunk)
 		})
+		fmt.Println()
 
 		if err != nil {
-			fmt.Println(styleError.Render(fmt.Sprintf("Error: %v", err)))
-		} else {
-			fmt.Println(aiStyle.Render("\nAI: ") + answer)
+			fmt.Println(styleError.Render(fmt.Sprintf("\nError: %v", err)))
 		}
 	}
 }

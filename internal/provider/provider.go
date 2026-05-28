@@ -10,7 +10,7 @@ type Provider interface {
 }
 
 type Chatter interface {
-	AskChat(prompt string, context string) (string, error)
+	AskChatStream(prompt string, context string, onChunk func(string)) error
 }
 
 type Embedder interface {
