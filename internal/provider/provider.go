@@ -9,6 +9,14 @@ type Provider interface {
 	GetName() string
 }
 
+type Chatter interface {
+	AskChat(prompt string, context string) (string, error)
+}
+
+type Embedder interface {
+	GenerateEmbedding(text string) ([]float32, error)
+}
+
 type ProviderFactory struct {
 }
 

@@ -56,6 +56,10 @@ func main() {
 		handleSync()
 	case "pr":
 		handlePR()
+	case "index":
+		handleIndex()
+	case "chat":
+		handleChat()
 	case "init":
 		handleInit()
 	case "config":
@@ -91,6 +95,8 @@ func printUsage() {
 	fmt.Println("  pull    Fetch and merge remote changes")
 	fmt.Println("  sync    Combined status -> add -> commit -> push")
 	fmt.Println("  pr      Create and manage Pull Requests")
+	fmt.Println("  index   Index the repository for AI chat")
+	fmt.Println("  chat    Chat with your repository codebase")
 	fmt.Println("  config  Manage configuration (run without args for interactive mode)")
 	fmt.Println("  auth    Authenticate with platforms (GitHub/GitLab)")
 	fmt.Println("  doctor  Validate setup")
